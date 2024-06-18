@@ -19,7 +19,7 @@ from PreProcess import PreProcess
 import models.vision_transformer as vits
 from models.gr1 import GR1 
 from AccelerateFix import AsyncStep
-
+# fsc
 def masked_loss(pred, target, mask, skip_frame=0, loss_func=F.mse_loss):
     if skip_frame == 0:
         new_pred = pred
