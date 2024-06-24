@@ -8,7 +8,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 import models.vision_transformer as vits
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class TrayPredictPolicy(nn.Module):
+class TrajPredictPolicy(nn.Module):
     def __init__(
         self,
         model_clip,
