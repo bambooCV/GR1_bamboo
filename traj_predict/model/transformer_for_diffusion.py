@@ -145,7 +145,7 @@ class TransformerForDiffusion(ModuleAttrMixin):
             mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
             self.register_buffer("mask", mask)
             
-            if time_as_cond and obs_as_cond:
+            if False:
                 S = T_cond
                 t, s = torch.meshgrid(
                     torch.arange(T),
@@ -357,7 +357,7 @@ class TransformerForDiffusion(ModuleAttrMixin):
             x = self.decoder(
                 tgt=x,
                 memory=memory,
-                tgt_mask=self.mask,
+                tgt_mask=self.mask, # 这个是mask矩阵 x*x 代表
                 memory_mask=self.memory_mask
             )
             # (B,T,n_emb)
@@ -455,7 +455,7 @@ if __name__ == '__main__':
         cond_dim=10,
         causal_attn=True,
         # time_as_cond=False,
-        # n_cond_layers=4
+        n_cond_layers=4
     )
     opt = transformer.configure_optimizers()
     

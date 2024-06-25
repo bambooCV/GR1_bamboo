@@ -121,29 +121,19 @@ class LMDBDataset(Dataset):
                 
                 # 可视化 action ori 和 downsample的
                 # visualization 轨迹
-                import cv2
-                rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
-                for point_2d in future_2d_actions[:,:2]:
-                    cv2.circle(rgb_static_rgb, tuple(point_2d.tolist()), radius=3, color=(0, 255, 255), thickness=-1)
-                for point_2d in actions[i,:,:]:
-                    cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                # 把inst的文字放在图片左下角 放在左下角！
+                # import cv2
+                # rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
+                # for point_2d in future_2d_actions[:,:2]:
+                #     cv2.circle(rgb_static_rgb, tuple(point_2d.tolist()), radius=3, color=(0, 255, 255), thickness=-1)
+                # for point_2d in actions[i,:,:]:
+                #     cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                # # 把inst的文字放在图片左下角 放在左下角！
                 
-                cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
-                cv2.waitKey(0)
+                # cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                # cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
+                # cv2.waitKey(0)
 
 
-                
-        # 把剩余的action都读取出来 
-        # read_idx =  idx      
-        # rest_rel_actions = []
-        # while loads(self.txn.get(f'cur_episode_{read_idx}'.encode())) == cur_episode:
-        #     rest_rel_actions.append(loads(self.txn.get(f'rel_action_{read_idx}'.encode())))
-        #     read_idx = read_idx + 1
-        # # rest_actions转tensor
-        # rest_rel_actions = torch.stack(rest_rel_actions)    
-        # print(rest_rel_actions)    
         return {
             'rgb_static': rgb_static,
             'rgb_gripper': rgb_gripper,
@@ -152,7 +142,6 @@ class LMDBDataset(Dataset):
             'gripper_state': gripper_state,
             'actions': actions,
             'mask': mask,
-            #'rest_rel_actions':rest_rel_actions
         }
 
     def __len__(self):
