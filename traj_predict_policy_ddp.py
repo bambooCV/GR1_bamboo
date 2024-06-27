@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '6,7'
 import sys
 import torch,clip
 import torch.nn as nn
@@ -13,12 +13,15 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 import torch.nn.functional as F
+from accelerate import Accelerator
+from accelerate.utils import DistributedDataParallelKwargs, InitProcessGroupKwargs
+from datetime import timedelta
 from transformers import get_scheduler
 import wandb
 os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
 def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
-    save_path = os.path.join(save_dir, f'best_checkpoint.pth')
+    save_path = os.path.join(save_dir, f'ddp_best_checkpoint.pth')
     # 获取未冻结的参数
     # model_state_dict = {k: v for k, v in model.state_dict().items() if v.requires_grad}
     torch.save({
@@ -166,15 +169,21 @@ class TrajPredictPolicy(nn.Module):
 
 if __name__ == '__main__':
     # wandb输出
-    wandb_model = True
+    wandb_model = False
     if wandb_model:
         wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_0626normaction')
+    init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    acc = Accelerator(
+        kwargs_handlers=[init_pg_kwargs, ddp_kwargs]
+    )
+    acc = Accelerator()
+    device = acc.device
     # config prepare
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 64
     num_workers = 4
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
         rgb_shape = [224,224],
@@ -249,18 +258,26 @@ if __name__ == '__main__':
     optimizer = torch.optim.AdamW(
             params=model.parameters(),
             lr=1e-4, weight_decay=1e-6)
-
+    model, optimizer, train_loader, val_loader = acc.prepare(
+        model, 
+        optimizer, 
+        train_loader, 
+        val_loader, 
+        device_placement=[True, True, False, False], # 前两个参数为模型参数放入GPU，最后两个参数为数据参数，放入CPU
+    )
     lr_scheduler = get_scheduler(
             name='cosine',
             optimizer=optimizer,
             num_warmup_steps=500,
             num_training_steps=len(train_prefetcher.loader.dataset) * epoch_num
         )
+
+
     best_loss = float('inf')
     for epoch in tqdm(range(epoch_num), desc="Epochs"):
         total_loss = 0
         val_total_loss = 0
-        with tqdm(total=int(len(train_prefetcher.loader.dataset)/batch_size), desc=f"TrainEpoch {epoch+1}", leave=False) as pbar:
+        with tqdm(total=int(len(train_prefetcher.loader.dataset)/batch_size), desc=f"TrainEpoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
             batch, load_time = train_prefetcher.next()
             while batch is not None:
                 model.train()
@@ -295,7 +312,8 @@ if __name__ == '__main__':
                 # optimize
                 if wandb_model:
                     wandb.log({'loss': loss})
-                loss.backward()
+                # loss.backward()
+                acc.backward(loss)
                 optimizer.step()
                 optimizer.zero_grad()
                 # step lr scheduler every batch
@@ -367,7 +385,7 @@ if __name__ == '__main__':
                     batch, load_time = val_prefetcher.next()
                     val_index = val_index + 1
                         
-                avg_val_loss = val_total_loss/val_index
+                avg_val_loss = val_total_loss*batch_size/len(val_prefetcher.loader.dataset)
                 if wandb_model:
                     wandb.log({'avg_val_loss': avg_val_loss})
                 print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')

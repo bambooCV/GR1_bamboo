@@ -19,12 +19,24 @@ os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
 def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
     save_path = os.path.join(save_dir, f'best_checkpoint.pth')
+    # 获取未冻结的参数
+    # model_state_dict = {k: v for k, v in model.state_dict().items() if v.requires_grad}
     torch.save({
         'epoch': epoch,
-        'model_state_dict': model.state_dict(),
+        'model_state_dict':model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss
     }, save_path)
+def normalize_data(data, stats={'min': 0,'max': 224}):
+    # nomalize to [0,1]
+    ndata = (data - stats['min']) / (stats['max'] - stats['min'])
+    # normalize to [-1, 1]
+    ndata = ndata * 2 - 1
+    return ndata
+def unnormalize_data(ndata, stats={'min': 0,'max': 224}):
+    ndata = (ndata + 1) / 2 # [-1, 1] -> [0, 1] 域
+    data = ndata * (stats['max'] - stats['min']) + stats['min']
+    return data
 class PreProcess(): 
     def __init__(
             self,
@@ -69,6 +81,7 @@ def transform_points(points, crop_box, transformed_image):
             transformed_points.append([(int((x - crop_x) * scale_x), int((y - crop_y) * scale_y)) for x, y in points[batch_idx, seq_idx]])
     transformed_points = torch.tensor(transformed_points).unsqueeze(1)
     return transformed_points
+
 class TrajPredictPolicy(nn.Module):
     def __init__(
         self,
@@ -150,15 +163,16 @@ class TrajPredictPolicy(nn.Module):
         noise_pred = self.noise_pred_net(noisy_actions, timesteps, obs_cond)
         
         return noise_pred,noise
+
 if __name__ == '__main__':
     # wandb输出
     wandb_model = False
     if wandb_model:
-        wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_night')
+        wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_0626normaction')
     # config prepare
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 1
-    num_workers = 1
+    batch_size = 64
+    num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
     lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
     #image preprocess
@@ -177,15 +191,15 @@ if __name__ == '__main__':
         chunk_size = 30,# 最长不超过30
         action_dim = 2, # x,y,gripper_state
         start_ratio = 0,
-        end_ratio = 0.9, 
+        end_ratio = 0.95, 
     )
     val_dataset = LMDBDataset(
         lmdb_dir = lmdb_dir, 
         sequence_length = 1, 
         chunk_size = 30,# 最长不超过30
         action_dim = 2,
-        start_ratio = 0,
-        end_ratio = 0.9, 
+        start_ratio = 0.95,
+        end_ratio = 1, 
     )
     train_loader = DataLoader(
         train_dataset, 
@@ -201,16 +215,17 @@ if __name__ == '__main__':
         batch_size=batch_size, # to be flattened in prefetcher  
         num_workers=num_workers,
         pin_memory=True, # Accelerate data reading
-        shuffle=True,
+        shuffle=False,
         prefetch_factor=2,
         persistent_workers=True,
     ) 
     train_prefetcher = DataPrefetcher(train_loader, device)
-    test_prefetcher = DataPrefetcher(val_loader, device)
+    val_prefetcher = DataPrefetcher(val_loader, device)
              
 
     model = TrajPredictPolicy()
-    model_path = "Save/best_checkpoint.pth"
+    # 预训练模型读入
+    model_path = "Save/task_D_epoch11_best_checkpoint.pth"
     model.load_state_dict(torch.load(model_path)['model_state_dict'])
     model = model.to(device)
     
@@ -226,39 +241,80 @@ if __name__ == '__main__':
         # our network predicts noise (instead of denoised action)
         prediction_type='epsilon'
     )
+    # training config
+    epoch_num = 100
+    # ema = EMAModel(
+    #     parameters=model.parameters(),
+    #     power=0.75)
+    optimizer = torch.optim.AdamW(
+            params=model.parameters(),
+            lr=1e-4, weight_decay=1e-6)
+
+    lr_scheduler = get_scheduler(
+            name='cosine',
+            optimizer=optimizer,
+            num_warmup_steps=500,
+            num_training_steps=len(train_prefetcher.loader.dataset) * epoch_num
+        )
 
 
+    # evaluation
     with torch.no_grad():
-        batch, load_time = test_prefetcher.next()
-        while batch is not None:
+        batch, load_time = val_prefetcher.next()
+        val_index = 0
+        while batch is not None and val_index < 10:
             model.eval()
             language = batch['inst_token']
             image = batch['rgb_static']
             naction = batch['actions']
             # example inputs
             rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=False)  
-            naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device)  # diffusion label    
-            
-            noisy_action = torch.randn(
-                    (1, 30, 2), device=device)
+            naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)   # diffusion label    
+            naction_trans_norm = normalize_data(naction_transformed)
+            noisy_action = torch.randn(naction.shape, device=device)
+            batch_val_size,sequence,chunk_size,dim = noisy_action.shape
+            noisy_action = noisy_action.reshape(batch_val_size*sequence,chunk_size,dim)
             out_action = noisy_action
             # init scheduler
             noise_scheduler.set_timesteps(num_diffusion_iters)
             for k in noise_scheduler.timesteps:
                 # predict noise
                 noise_pred,noise = model(noise_scheduler,rgb_static_norm, language, 
-                                         naction_transformed,device,
-                                         timesteps=k, noisy_actions=out_action)
+                                        naction_trans_norm,device,
+                                        timesteps=k, noisy_actions=out_action)
                 # inverse diffusion step (remove noise)
                 out_action = noise_scheduler.step(
                     model_output=noise_pred,
                     timestep=k,
                     sample=out_action
                 ).prev_sample
-            print(out_action)
-        
+            re_out_action = unnormalize_data(out_action)
+            val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
+            # visualization croped image
+            # Convert tensor to NumPy array for visualization
+            re_out_action = re_out_action.unsqueeze(1)
+            import cv2
+            for batch_idx in range(image.shape[0]):
+                for seq_idx in range(image.shape[1]):
 
-
+                    rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                    for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
+                        cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                    rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
+                    cv2.putText(rgb_static_np, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                    cv2.imshow("Ori Cropped I mage", rgb_static_np)
+                    
+                    rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                    for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
+                        cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                    rgb_static_np2 = (rgb_static_np2 * 255).astype(np.uint8)
+                    cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                    cv2.imshow("Pred Cropped I mage", rgb_static_np2)
+                    
+                    
+                    cv2.waitKey(0)
+            batch, load_time = val_prefetcher.next()
+    
        
 
 

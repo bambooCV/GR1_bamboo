@@ -9,7 +9,28 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+        {
+            "name": "Python: Accelerate Launch",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/traj_predict_policy_ddp.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "args": [
+                "accelerate",
+                "launch",
+                "--main_process_port",
+                "5678"
+            ],
+            "preLaunchTask": "Accelerate Setup"
         }
-    ]
+
+    ],
+
 }
