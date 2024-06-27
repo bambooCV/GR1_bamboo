@@ -46,7 +46,8 @@ class DataPrefetcher():
             return 
         with torch.cuda.stream(self.stream):
             for key in self.batch:
-                self.batch[key] = self.batch[key].to(self.device, non_blocking=True)
+                if isinstance(self.batch[key], torch.Tensor):
+                    self.batch[key] = self.batch[key].to(self.device, non_blocking=True)
 
     def next(self):
         clock = time()
@@ -54,7 +55,8 @@ class DataPrefetcher():
         if batch is not None:
             for key in batch:
                 if batch[key] is not None:
-                    batch[key].record_stream(torch.cuda.current_stream())
+                    if isinstance(batch[key], torch.Tensor):
+                        batch[key].record_stream(torch.cuda.current_stream())
         self.preload()
         return batch, time()-clock
 
@@ -137,6 +139,7 @@ class LMDBDataset(Dataset):
         return {
             'rgb_static': rgb_static,
             'rgb_gripper': rgb_gripper,
+            'inst':inst,
             'inst_token': inst_token,
             'arm_state': arm_state,
             'gripper_state': gripper_state,
