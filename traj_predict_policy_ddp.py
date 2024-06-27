@@ -129,13 +129,10 @@ class TrajPredictPolicy(nn.Module):
             )
             
     def forward(self, 
-        noise_scheduler,
         rgb_static_norm,
         language,
-        naction,
-        device,
-        timesteps = None,
-        noisy_actions = None,
+        timesteps,
+        noisy_actions,
         ):
         # model input prepare: noisy_actions, timesteps, obs_cond
         # image batch*seq, channel, height, width
@@ -147,43 +144,33 @@ class TrajPredictPolicy(nn.Module):
             lang_embeddings = self.model_clip.encode_text(language).unsqueeze(1)
 
         patch_embeddings = self.proj_static_img(patch_embeddings)
-        if timesteps is None:
-            timesteps = torch.randint(
-            0, noise_scheduler.config.num_train_timesteps,
-            (batch_size,), device=device).long()
-        if noisy_actions is None:
-            # sample noise to add to actions
-            noise = torch.randn(naction.shape, device=device)
-            noisy_actions = noise_scheduler.add_noise(naction, noise, timesteps) 
-            _,_,chunk_size,dim = noisy_actions.shape
-            noisy_actions = noisy_actions.reshape(batch_size*sequence,chunk_size,dim)
-        else:
-            noise = noisy_actions
+
+        
         # concatenate vision feature and language obs
         obs_features = torch.cat([patch_embeddings, lang_embeddings], dim=1)
         obs_cond = obs_features
         
         noise_pred = self.noise_pred_net(noisy_actions, timesteps, obs_cond)
         
-        return noise_pred,noise
+        return noise_pred
 
 if __name__ == '__main__':
     # wandb输出
     wandb_model = False
     if wandb_model:
         wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_0626normaction')
-    init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
+
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     acc = Accelerator(
-        kwargs_handlers=[init_pg_kwargs, ddp_kwargs]
+        kwargs_handlers=[ddp_kwargs]
     )
-    acc = Accelerator()
+
     device = acc.device
     # config prepare
     batch_size = 64
     num_workers = 4
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
         rgb_shape = [224,224],
@@ -228,15 +215,15 @@ if __name__ == '__main__':
         prefetch_factor=2,
         persistent_workers=True,
     ) 
-    train_prefetcher = DataPrefetcher(train_loader, device)
-    val_prefetcher = DataPrefetcher(val_loader, device)
-             
 
+            
     model = TrajPredictPolicy()
     # 预训练模型读入
     # model_path = "Save/best_checkpoint.pth"
     # model.load_state_dict(torch.load(model_path)['model_state_dict'],strict=False)
     model = model.to(device)
+
+
     
     # policy config
     num_diffusion_iters = 100
@@ -252,9 +239,7 @@ if __name__ == '__main__':
     )
     # training config
     epoch_num = 100
-    # ema = EMAModel(
-    #     parameters=model.parameters(),
-    #     power=0.75)
+
     optimizer = torch.optim.AdamW(
             params=model.parameters(),
             lr=1e-4, weight_decay=1e-6)
@@ -265,11 +250,13 @@ if __name__ == '__main__':
         val_loader, 
         device_placement=[True, True, False, False], # 前两个参数为模型参数放入GPU，最后两个参数为数据参数，放入CPU
     )
+    train_prefetcher = DataPrefetcher(train_loader, device)
+    val_prefetcher = DataPrefetcher(val_loader, device)
     lr_scheduler = get_scheduler(
             name='cosine',
             optimizer=optimizer,
-            num_warmup_steps=500,
-            num_training_steps=len(train_prefetcher.loader.dataset) * epoch_num
+            num_warmup_steps=5,
+            num_training_steps=len(train_loader) * epoch_num
         )
 
 
@@ -277,7 +264,8 @@ if __name__ == '__main__':
     for epoch in tqdm(range(epoch_num), desc="Epochs"):
         total_loss = 0
         val_total_loss = 0
-        with tqdm(total=int(len(train_prefetcher.loader.dataset)/batch_size), desc=f"TrainEpoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
+        # training
+        with tqdm(total=len(train_loader), desc=f"Train Epoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
             batch, load_time = train_prefetcher.next()
             while batch is not None:
                 model.train()
@@ -306,14 +294,22 @@ if __name__ == '__main__':
                 #         rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
                 #         cv2.imshow("Cropped I mage", rgb_static_np)
                 #         cv2.waitKey(0)
-                    
-                noise_pred,noise = model(noise_scheduler,rgb_static_norm, language, naction_trans_norm,device)
+                timesteps = torch.randint(
+                    0, noise_scheduler.config.num_train_timesteps,
+                    (naction_trans_norm.shape[0],), device=device).long()
+                noise = torch.randn(naction_trans_norm.shape, device=device)
+                noisy_actions = noise_scheduler.add_noise(naction_trans_norm, noise, timesteps) 
+                b,s,chunk_size,dim = noisy_actions.shape
+                noisy_actions = noisy_actions.reshape(b*s,chunk_size,dim)
+                
+                noise_pred = model(rgb_static_norm, language, timesteps, noisy_actions)
                 loss = nn.functional.mse_loss(noise_pred, noise.squeeze(1))
                 # optimize
                 if wandb_model:
                     wandb.log({'loss': loss})
                 # loss.backward()
                 acc.backward(loss)
+            
                 optimizer.step()
                 optimizer.zero_grad()
                 # step lr scheduler every batch
@@ -337,9 +333,9 @@ if __name__ == '__main__':
                 best_loss = avg_train_loss
                 save_checkpoint(epoch, model, optimizer, best_loss)
             print(f'Epoch {epoch+1}/{epoch_num}, Train Average Loss: {avg_train_loss:.4f})')
-        
-        with tqdm(total=int(len(val_prefetcher.loader.dataset)/batch_size), desc=f"Val Epoch {epoch+1}", leave=False) as pbar:
-            # evaluation
+        # evaluation
+        with tqdm(total=len(val_loader), desc=f"Val Epoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
+
             with torch.no_grad():
                 batch, load_time = val_prefetcher.next()
                 val_index = 0
@@ -360,9 +356,7 @@ if __name__ == '__main__':
                     noise_scheduler.set_timesteps(num_diffusion_iters)
                     for k in noise_scheduler.timesteps:
                         # predict noise
-                        noise_pred,noise = model(noise_scheduler,rgb_static_norm, language, 
-                                                naction_trans_norm,device,
-                                                timesteps=k, noisy_actions=out_action)
+                        noise_pred = model(rgb_static_norm, language, timesteps=k, noisy_actions=out_action)
                         # inverse diffusion step (remove noise)
                         out_action = noise_scheduler.step(
                             model_output=noise_pred,
@@ -385,7 +379,7 @@ if __name__ == '__main__':
                     batch, load_time = val_prefetcher.next()
                     val_index = val_index + 1
                         
-                avg_val_loss = val_total_loss*batch_size/len(val_prefetcher.loader.dataset)
+                avg_val_loss = val_total_loss/val_index
                 if wandb_model:
                     wandb.log({'avg_val_loss': avg_val_loss})
                 print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')
