@@ -250,12 +250,7 @@ if __name__ == '__main__':
             params=model.parameters(),
             lr=1e-4, weight_decay=1e-6)
 
-    lr_scheduler = get_scheduler(
-            name='cosine',
-            optimizer=optimizer,
-            num_warmup_steps=500,
-            num_training_steps=len(train_prefetcher.loader.dataset) * epoch_num
-        )
+
 
 
     # evaluation

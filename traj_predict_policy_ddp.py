@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '6,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3,5,6,7'
 import sys
 import torch,clip
 import torch.nn as nn
@@ -158,7 +158,7 @@ if __name__ == '__main__':
     # wandb输出
     wandb_model = False
     if wandb_model:
-        wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_0626normaction')
+        wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='DDP traj diffusion_0627')
 
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     acc = Accelerator(
@@ -169,8 +169,8 @@ if __name__ == '__main__':
     # config prepare
     batch_size = 64
     num_workers = 4
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
         rgb_shape = [224,224],
@@ -265,6 +265,7 @@ if __name__ == '__main__':
         total_loss = 0
         val_total_loss = 0
         # training
+        # Only show progress bar on main process
         with tqdm(total=len(train_loader), desc=f"Train Epoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
             batch, load_time = train_prefetcher.next()
             while batch is not None:
@@ -326,13 +327,15 @@ if __name__ == '__main__':
                 )
                 pbar.update(1)
                 batch, load_time = train_prefetcher.next()
-            avg_train_loss = total_loss*batch_size/len(train_prefetcher.loader.dataset)
-            if wandb_model:
-                wandb.log({'avg_train_loss': avg_train_loss})
-            if avg_train_loss < best_loss:
-                best_loss = avg_train_loss
-                save_checkpoint(epoch, model, optimizer, best_loss)
+        avg_train_loss = total_loss/len(train_loader)
+        if wandb_model:
+            wandb.log({'avg_train_loss': avg_train_loss})
+        if avg_train_loss < best_loss:
+            best_loss = avg_train_loss
+            save_checkpoint(epoch, model, optimizer, best_loss)
+        if acc.is_main_process:
             print(f'Epoch {epoch+1}/{epoch_num}, Train Average Loss: {avg_train_loss:.4f})')
+            
         # evaluation
         with tqdm(total=len(val_loader), desc=f"Val Epoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
 
@@ -382,7 +385,8 @@ if __name__ == '__main__':
                 avg_val_loss = val_total_loss/val_index
                 if wandb_model:
                     wandb.log({'avg_val_loss': avg_val_loss})
-                print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')
+        if acc.is_main_process:
+            print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')
         
        
 
