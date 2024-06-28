@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '5'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import sys
 import torch,clip
 import torch.nn as nn
@@ -15,18 +15,10 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from transformers import get_scheduler
 import wandb
+from time import time
 os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
-def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
-    save_path = os.path.join(save_dir, f'best_checkpoint.pth')
-    # 获取未冻结的参数
-    # model_state_dict = {k: v for k, v in model.state_dict().items() if v.requires_grad}
-    torch.save({
-        'epoch': epoch,
-        'model_state_dict':model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss
-    }, save_path)
+
 def normalize_data(data, stats={'min': 0,'max': 224}):
     # nomalize to [0,1]
     ndata = (data - stats['min']) / (stats['max'] - stats['min'])
@@ -94,12 +86,12 @@ class TrajPredictPolicy(nn.Module):
         checkpoint_vit = torch.load("/gpfsdata/home/shichao/EmbodiedAI/manipulation/PretrainModel_Download/vit/mae_pretrain_vit_base.pth")
         model_mae.load_state_dict(checkpoint_vit['model'], strict=False)
         # language encoders model
-        model_clip, _ = clip.load("ViT-B/32") 
+        model_clip, _ = clip.load("ViT-B/32",device="cpu") 
         # CLIP for language encoding
         self.model_clip = model_clip
         for _, param in self.model_clip.named_parameters():
             param.requires_grad = False
-                # MAE for image encoding
+        # MAE for image encoding
         self.model_mae = model_mae
         for _, param in self.model_mae.named_parameters():
             param.requires_grad = False
@@ -124,45 +116,44 @@ class TrajPredictPolicy(nn.Module):
                 # time_as_cond=False,
                 # n_cond_layers=4
             )
-            
+    def pre_processing(self, rgb_static_norm, language, train=False):
+        batch_size, sequence, channel, height, width = rgb_static_norm.shape
+        rgb_static_norm = rgb_static_norm.view(batch_size*sequence, channel, height, width)
+        language_embedding = self.model_clip.encode_text(language).unsqueeze(1)
+        obs_embeddings, patch_embeddings = self.model_mae(rgb_static_norm)
+        return language_embedding, obs_embeddings, patch_embeddings
+              
     def forward(self, 
-        noise_scheduler,
         rgb_static_norm,
         language,
-        naction,
-        device,
-        timesteps = None,
-        noisy_actions = None,
+        timesteps,
+        noisy_actions,
+        language_embedding = None,
+        obs_embeddings = None,
+        patch_embeddings = None
         ):
         # model input prepare: noisy_actions, timesteps, obs_cond
         # image batch*seq, channel, height, width
         batch_size, sequence, channel, height, width = rgb_static_norm.shape
         rgb_static_norm = rgb_static_norm.view(batch_size*sequence, channel, height, width)
 
-        with torch.no_grad():
-            obs_embeddings, patch_embeddings = self.model_mae(rgb_static_norm)
-            lang_embeddings = self.model_clip.encode_text(language).unsqueeze(1)
+        if language_embedding is None and obs_embeddings is None and patch_embeddings is None:
+            with torch.no_grad():
+                language_embedding = self.model_clip.encode_text(language).unsqueeze(1)
+                obs_embeddings, patch_embeddings = self.model_mae(rgb_static_norm)
+
 
         patch_embeddings = self.proj_static_img(patch_embeddings)
-        if timesteps is None:
-            timesteps = torch.randint(
-            0, noise_scheduler.config.num_train_timesteps,
-            (batch_size,), device=device).long()
-        if noisy_actions is None:
-            # sample noise to add to actions
-            noise = torch.randn(naction.shape, device=device)
-            noisy_actions = noise_scheduler.add_noise(naction, noise, timesteps) 
-            _,_,chunk_size,dim = noisy_actions.shape
-            noisy_actions = noisy_actions.reshape(batch_size*sequence,chunk_size,dim)
-        else:
-            noise = noisy_actions
+
+        
         # concatenate vision feature and language obs
-        obs_features = torch.cat([patch_embeddings, lang_embeddings], dim=1)
+        obs_features = torch.cat([patch_embeddings, language_embedding], dim=1)
         obs_cond = obs_features
         
         noise_pred = self.noise_pred_net(noisy_actions, timesteps, obs_cond)
         
-        return noise_pred,noise
+        return noise_pred
+
 
 if __name__ == '__main__':
     # wandb输出
@@ -174,7 +165,8 @@ if __name__ == '__main__':
     batch_size = 64
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABCD_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
         rgb_shape = [224,224],
@@ -222,11 +214,19 @@ if __name__ == '__main__':
     train_prefetcher = DataPrefetcher(train_loader, device)
     val_prefetcher = DataPrefetcher(val_loader, device)
              
-
     model = TrajPredictPolicy()
     # 预训练模型读入
-    model_path = "Save/task_D_epoch11_best_checkpoint.pth"
-    model.load_state_dict(torch.load(model_path)['model_state_dict'])
+    model_path = "Save/ddp_best_checkpoint.pth"
+    state_dict = torch.load(model_path,map_location=device)['model_state_dict']
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        new_key = key.replace('module.', '')
+        new_state_dict[new_key] = value
+        multi_gpu = True
+    if multi_gpu:
+        model.load_state_dict(new_state_dict)
+    else:
+        model.load_state_dict(state_dict)
     model = model.to(device)
     
     # policy config
@@ -241,17 +241,6 @@ if __name__ == '__main__':
         # our network predicts noise (instead of denoised action)
         prediction_type='epsilon'
     )
-    # training config
-    epoch_num = 100
-    # ema = EMAModel(
-    #     parameters=model.parameters(),
-    #     power=0.75)
-    optimizer = torch.optim.AdamW(
-            params=model.parameters(),
-            lr=1e-4, weight_decay=1e-6)
-
-
-
 
     # evaluation
     with torch.no_grad():
@@ -260,6 +249,7 @@ if __name__ == '__main__':
         while batch is not None and val_index < 10:
             model.eval()
             language = batch['inst_token']
+            language_embedding = batch['inst_emb']
             image = batch['rgb_static']
             naction = batch['actions']
             # example inputs
@@ -272,17 +262,23 @@ if __name__ == '__main__':
             out_action = noisy_action
             # init scheduler
             noise_scheduler.set_timesteps(num_diffusion_iters)
+            language_embedding, obs_embeddings, patch_embeddings = model.pre_processing(rgb_static_norm, language)
+            start_time = time()
             for k in noise_scheduler.timesteps:
                 # predict noise
-                noise_pred,noise = model(noise_scheduler,rgb_static_norm, language, 
-                                        naction_trans_norm,device,
-                                        timesteps=k, noisy_actions=out_action)
+                noise_pred = model(rgb_static_norm, language, timesteps=k, noisy_actions=out_action,
+                                   language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
+                end_time_noise_pred = time()
                 # inverse diffusion step (remove noise)
                 out_action = noise_scheduler.step(
                     model_output=noise_pred,
                     timestep=k,
                     sample=out_action
                 ).prev_sample
+            end_time = time()
+            execution_time = end_time - start_time
+
+            print(f"Code block executed in {execution_time} seconds.")
             re_out_action = unnormalize_data(out_action)
             val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
             # visualization croped image

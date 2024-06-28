@@ -156,21 +156,19 @@ class TrajPredictPolicy(nn.Module):
 
 if __name__ == '__main__':
     # wandb输出
-    wandb_model = False
-    if wandb_model:
-        wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='DDP traj diffusion_0627')
-
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     acc = Accelerator(
         kwargs_handlers=[ddp_kwargs]
     )
-
+    wandb_model = True
+    if wandb_model and acc.is_main_process:
+        wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='DDP traj diffusion_0627')
     device = acc.device
     # config prepare
     batch_size = 64
     num_workers = 4
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
         rgb_shape = [224,224],
@@ -306,7 +304,7 @@ if __name__ == '__main__':
                 noise_pred = model(rgb_static_norm, language, timesteps, noisy_actions)
                 loss = nn.functional.mse_loss(noise_pred, noise.squeeze(1))
                 # optimize
-                if wandb_model:
+                if wandb_model and acc.is_main_process:
                     wandb.log({'loss': loss})
                 # loss.backward()
                 acc.backward(loss)
@@ -327,14 +325,15 @@ if __name__ == '__main__':
                 )
                 pbar.update(1)
                 batch, load_time = train_prefetcher.next()
-        avg_train_loss = total_loss/len(train_loader)
-        if wandb_model:
-            wandb.log({'avg_train_loss': avg_train_loss})
-        if avg_train_loss < best_loss:
-            best_loss = avg_train_loss
-            save_checkpoint(epoch, model, optimizer, best_loss)
-        if acc.is_main_process:
-            print(f'Epoch {epoch+1}/{epoch_num}, Train Average Loss: {avg_train_loss:.4f})')
+            avg_train_loss = total_loss/len(train_loader)
+            if wandb_model and acc.is_main_process:
+                wandb.log({'avg_train_loss': avg_train_loss})
+            if avg_train_loss < best_loss:
+                best_loss = avg_train_loss
+                save_checkpoint(epoch, model, optimizer, best_loss)
+            if acc.is_main_process:
+
+                print(f'Epoch {epoch+1}/{epoch_num}, Train Average Loss: {avg_train_loss:.4f})')
             
         # evaluation
         with tqdm(total=len(val_loader), desc=f"Val Epoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
@@ -368,7 +367,7 @@ if __name__ == '__main__':
                         ).prev_sample
                     re_out_action = unnormalize_data(out_action)
                     val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
-                    if wandb_model:
+                    if wandb_model and acc.is_main_process:
                         wandb.log({'val_sample_loss': val_sample_loss})
                                     # logging
                     val_total_loss += val_sample_loss.item()
@@ -383,10 +382,11 @@ if __name__ == '__main__':
                     val_index = val_index + 1
                         
                 avg_val_loss = val_total_loss/val_index
-                if wandb_model:
+                if wandb_model and acc.is_main_process:
                     wandb.log({'avg_val_loss': avg_val_loss})
-        if acc.is_main_process:
-            print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')
+            if acc.is_main_process:
+
+                print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')
         
        
 
