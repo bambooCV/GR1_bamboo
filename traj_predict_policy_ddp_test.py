@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import sys
 import torch,clip
 import torch.nn as nn
@@ -21,7 +21,7 @@ import wandb
 os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
 def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
-    save_path = os.path.join(save_dir, f'ddp_task_ABC_D_best_checkpoint.pth')
+    save_path = os.path.join(save_dir, f'test_checkpoint.pth')
     # 获取未冻结的参数
     # model_state_dict = {k: v for k, v in model.state_dict().items() if v.requires_grad}
     torch.save({
@@ -170,16 +170,16 @@ if __name__ == '__main__':
     acc = Accelerator(
         kwargs_handlers=[ddp_kwargs]
     )
-    wandb_model = True
+    wandb_model = False
     if wandb_model and acc.is_main_process:
         wandb.init(project='robotic traj diffusion task_ABC_D', group='robotic traj diffusion', name='DDP traj diffusion_ABC_D_0701')
     device = acc.device
     # config prepare
     batch_size = 64
     num_workers = 4
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
         rgb_shape = [224,224],
@@ -353,7 +353,7 @@ if __name__ == '__main__':
             with torch.no_grad():
                 batch, load_time = val_prefetcher.next()
                 val_index = 0
-                while batch is not None and val_index < 20:
+                while batch is not None:
                     model.eval()
                     language = batch['inst_token']
                     image = batch['rgb_static']

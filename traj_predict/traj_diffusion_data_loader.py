@@ -106,7 +106,7 @@ class LMDBDataset(Dataset):
         cur_episode = loads(self.txn.get(f'cur_episode_{idx}'.encode()))
         inst_token = loads(self.txn.get(f'inst_token_{cur_episode}'.encode()))
         inst = loads(self.txn.get(f'inst_{cur_episode}'.encode()))
-
+        inst_emb = loads(self.txn.get(f'inst_emb_{cur_episode}'.encode()))
         for i in range(self.sequence_length):
             new_idx = idx + i
             if loads(self.txn.get(f'cur_episode_{new_idx}'.encode())) == cur_episode:
@@ -141,6 +141,7 @@ class LMDBDataset(Dataset):
             'rgb_gripper': rgb_gripper,
             'inst':inst,
             'inst_token': inst_token,
+            'inst_emb': inst_emb,
             'arm_state': arm_state,
             'gripper_state': gripper_state,
             'actions': actions,
