@@ -44,25 +44,28 @@ class Traj_PreProcess():
 class TrajPredictPolicy(nn.Module):
     def __init__(
         self,
-        
+        model_mae = None,
+        model_clip = None,
     ):
         super().__init__()
-
-        # vision encoders model
-        model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0)
-        checkpoint_vit = torch.load("/gpfsdata/home/shichao/EmbodiedAI/manipulation/PretrainModel_Download/vit/mae_pretrain_vit_base.pth")
-        model_mae.load_state_dict(checkpoint_vit['model'], strict=False)
-        # language encoders model
-        model_clip, _ = clip.load("ViT-B/32",device="cpu") 
-        # CLIP for language encoding
-        self.model_clip = model_clip
-        for _, param in self.model_clip.named_parameters():
-            param.requires_grad = False
-        # MAE for image encoding
-        self.model_mae = model_mae
-        for _, param in self.model_mae.named_parameters():
-            param.requires_grad = False
-            
+        if model_mae is None or model_clip is None:
+            # vision encoders model
+            model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0)
+            checkpoint_vit = torch.load("/gpfsdata/home/shichao/EmbodiedAI/manipulation/PretrainModel_Download/vit/mae_pretrain_vit_base.pth")
+            model_mae.load_state_dict(checkpoint_vit['model'], strict=False)
+            # language encoders model
+            model_clip, _ = clip.load("ViT-B/32",device="cpu") 
+            # CLIP for language encoding
+            self.model_clip = model_clip
+            for _, param in self.model_clip.named_parameters():
+                param.requires_grad = False
+            # MAE for image encoding
+            self.model_mae = model_mae
+            for _, param in self.model_mae.named_parameters():
+                param.requires_grad = False
+        else:
+            self.model_clip = model_clip
+            self.model_mae = model_mae
             
         self.hidden_size = 512
         self.img_feat_dim = 768

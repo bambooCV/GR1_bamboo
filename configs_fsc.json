@@ -2,7 +2,7 @@
   "evaluate_during_training": false,
   "record_evaluation_video": false,
   "compile_model": false,
-  "bytedance_ckpt_path": "/gpfsdata/home/shichao/EmbodiedAI/manipulation/GR1_bamboo/Save/GR1_snapshot_ABC_baseline_batch528/GR1_0.pth",
+  "bytedance_ckpt_path": "/gpfsdata/home/shichao/EmbodiedAI/manipulation/GR1_bamboo/Save/GR1_snapshot_ABC_baseline_batch528/GR1_17.pth",
   "load_bytedance_ckpt": true,
   "load_epoch": 0,
   "save_epochs": 1,

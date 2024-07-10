@@ -170,8 +170,8 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 def main():
     # Preparation
     cfg = json.load(open('configs_fsc.json'))
-    # The timeout here is 3600s to wait for other processes to finish the simulation
-    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
+    # The timeout here is 36000s to wait for other processes to finish the simulation
+    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=36000))
     acc = Accelerator(kwargs_handlers=[kwargs])
     device = acc.device
     preprocessor = PreProcess(
@@ -249,10 +249,10 @@ def main():
         eval_dir,
         debug=cfg['record_evaluation_video'],
     )).float().mean().to(device)
-    # acc.wait_for_everyone()
-    # avg_reward = acc.gather_for_metrics(avg_reward).mean()
-    # if acc.is_main_process:
-    #     print('average success rate ', avg_reward)
+    acc.wait_for_everyone()
+    avg_reward = acc.gather_for_metrics(avg_reward).mean()
+    if acc.is_main_process:
+        print('average success rate ', avg_reward)
 
 if __name__ == "__main__":
     main()

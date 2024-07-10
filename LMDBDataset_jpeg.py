@@ -7,10 +7,28 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision.io import decode_jpeg
-
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from traj_predict.traj_func import PreProcess
 ORIGINAL_STATIC_RES = 200
 ORIGINAL_GRIPPER_RES = 84
-
+def resample_sequence(sequence, target_length):
+    """
+    使用插值将 sequence 重新采样到 target_length，并将结果四舍五入为整数
+    :param sequence: 原始序列，形状为 [N, 2]
+    :param target_length: 目标序列长度
+    :return: 重新采样后的序列，形状为 [target_length, 2]
+    """
+    # 确保 sequence 是 float 类型
+    sequence = sequence.float()
+    sequence = sequence.unsqueeze(0).permute(0, 2, 1)  # 调整形状为 (1, 2, N)
+    resampled_sequence = F.interpolate(sequence, size=target_length, mode='linear', align_corners=True)
+    resampled_sequence = resampled_sequence.permute(0, 2, 1).squeeze(0)  # 调整回原始形状 (target_length, 2)
+    
+    # 将结果四舍五入为整数
+    resampled_sequence = torch.round(resampled_sequence).int()
+    
+    return resampled_sequence
 class DataPrefetcher():
     def __init__(self, loader, device):
         self.device = device
@@ -59,6 +77,7 @@ class LMDBDataset(Dataset):
         self.dummy_arm_state = torch.zeros(sequence_length, 6)
         self.dummy_gripper_state =  torch.zeros(sequence_length, 2)
         self.dummy_actions = torch.zeros(sequence_length, chunk_size, action_dim)
+        self.dummy_actions_2d = torch.zeros(sequence_length,30, 2)
         self.dummy_mask = torch.zeros(sequence_length, chunk_size)
         self.lmdb_dir = lmdb_dir
         env = lmdb.open(lmdb_dir, readonly=True, create=False, lock=False)
@@ -84,6 +103,7 @@ class LMDBDataset(Dataset):
         gripper_state = self.dummy_gripper_state.clone()
         actions = self.dummy_actions.clone()
         mask = self.dummy_mask.clone()
+        actions_2d = self.dummy_actions_2d.clone()
 
         cur_episode = loads(self.txn.get(f'cur_episode_{idx}'.encode()))
         inst_token = loads(self.txn.get(f'inst_token_{cur_episode}'.encode()))
@@ -102,6 +122,9 @@ class LMDBDataset(Dataset):
                         elif self.action_mode == 'ee_abs_pose':
                             actions[i, j] = loads(self.txn.get(f'abs_action_{idx+i+j}'.encode()))
                         actions[i, j, -1] = (actions[i, j, -1] + 1) / 2
+                future_2d_actions = loads(self.txn.get(f'traj_2d_{idx+i}'.encode()))
+                actions_2d[i] = resample_sequence(future_2d_actions[:,:2], 30)
+                
         return {
             'rgb_static': rgb_static,
             'rgb_gripper': rgb_gripper,
@@ -110,7 +133,66 @@ class LMDBDataset(Dataset):
             'gripper_state': gripper_state,
             'actions': actions,
             'mask': mask,
+            'actions_2d': actions_2d,
         }
 
     def __len__(self):
         return self.end_step - self.start_step
+if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    import json
+     # Preparation
+    cfg = json.load(open('configs_test.json'))
+    preprocessor = PreProcess(
+        cfg['rgb_static_pad'],
+        cfg['rgb_gripper_pad'],
+        cfg['rgb_shape'],
+        cfg['rgb_mean'],
+        cfg['rgb_std'],
+        device,
+    )
+    train_dataset = LMDBDataset(
+        cfg['LMDB_path'], 
+        cfg['seq_len'], 
+        cfg['chunk_size'], 
+        cfg['action_mode'],
+        cfg['act_dim'],
+        start_ratio = 0,
+        end_ratio = 0.9, 
+    )
+    test_dataset = LMDBDataset(
+        cfg['LMDB_path'], 
+        cfg['seq_len'], 
+        cfg['chunk_size'], 
+        cfg['action_mode'],
+        cfg['act_dim'],
+        start_ratio = 0.9,
+        end_ratio = 1, 
+    )
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=cfg['bs_per_gpu'], # to be flattened in prefetcher  
+        num_workers=cfg['workers_per_gpu'],
+        pin_memory=True, # Accelerate data reading
+        shuffle=False,
+        prefetch_factor=cfg['prefetch_factor'],
+        persistent_workers=True,
+    ) 
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=cfg['bs_per_gpu'], # to be flattened in prefetcher  
+        num_workers=cfg['workers_per_gpu'],
+        pin_memory=True, # Accelerate data reading
+        shuffle=False,
+        prefetch_factor=cfg['prefetch_factor'],
+        persistent_workers=True,
+    ) 
+    train_prefetcher = DataPrefetcher(train_loader, device)
+    test_prefetcher = DataPrefetcher(test_loader, device)
+    for epoch in range(10):
+        batch, load_time = train_prefetcher.next()
+        while batch is not None:
+            action_2d = batch['actions_2d']
+            rgb_static,rgb_gripper,actions_2d_transformed= preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions_2d'],train=True)     
+            print(batch)
+            batch, load_time = train_prefetcher.next()

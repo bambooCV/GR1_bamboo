@@ -228,7 +228,7 @@ def main():
         model = torch.compile(model)
     model_traj = TrajPredictPolicy()
     # 预训练模型读入
-    model_path_traj = "Save/ddp_task_ABC_D_best_checkpoint_epoch65.pth"
+    model_path_traj = "Save/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
     state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict_traj.items():
@@ -238,7 +238,7 @@ def main():
     if multi_gpu:
         model_traj.load_state_dict(new_state_dict)
     else:
-        model_traj.load_state_dict(state_dict)
+        model_traj.load_state_dict(state_dict_traj)
     model,model_traj = acc.prepare(model, model_traj,device_placement=[True,True])
     observation_space = {
         'rgb_obs': ['rgb_static', 'rgb_gripper'], 
@@ -261,8 +261,7 @@ def main():
         cfg['save_path']+'result.txt', 
         cfg['ep_len'],
         cfg['num_sequences'],
-        2,
-        #acc.num_processes,
+        acc.num_processes,
         acc.process_index,
         eval_dir,
         debug=cfg['record_evaluation_video'],

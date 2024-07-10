@@ -16,9 +16,10 @@ from torch.utils.tensorboard import SummaryWriter
 import clip
 from LMDBDataset_jpeg import LMDBDataset as LMDBdst_jpeg
 from LMDBDataset_jpeg import DataPrefetcher as DataPrefetcher_jpeg
-from PreProcess import PreProcess
+from traj_predict.traj_func import PreProcess,transform_points,normalize_data
 import models.vision_transformer as vits
-from models.gr1 import GR1 
+from models.gr1_2d import GR1 
+from tqdm import tqdm
 from AccelerateFix import AsyncStep
 # fsc
 def masked_loss(pred, target, mask, skip_frame=0, loss_func=F.mse_loss):
@@ -108,44 +109,21 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
         cum_load_time = 0 
         clock = time()
         batch_idx = 0
-        batch, load_time = train_prefetcher.next()
-        while batch is not None:
-            # training
-            with acc.accumulate(model):
-                model.train()
-                optimizer.zero_grad()
-                rgb_static, rgb_gripper = preprocessor.rgb_process(batch['rgb_static'], batch['rgb_gripper'], train=True)
-                obs_mask = batch['mask'][..., 0]
-                pred = model(
-                    rgb=rgb_static,
-                    hand_rgb=rgb_gripper,
-                    state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
-                    language=batch['inst_token'],
-                    attention_mask=obs_mask,
-                )
-                loss = {}
-                loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
-                loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
-                loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
-                loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
-                total_loss = loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] 
-                acc.backward(total_loss)
-                optimizer.step(optimizer)
-                for key in log_loss:
-                    log_loss[key] += loss[key].detach() / cfg['print_steps']
-                cum_load_time += load_time / cfg['print_steps']
-            # evaluation test dataset
-            if batch_idx % eval_steps == 0:
-                with torch.no_grad():
-                    model.eval()
-                    batch, _ = test_prefetcher.next_without_none()
-                    rgb_static, rgb_gripper = preprocessor.rgb_process(batch['rgb_static'], batch['rgb_gripper'], train=False)
+        with tqdm(total=train_dataset_len, desc=f"Train Epoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
+            batch, load_time = train_prefetcher.next()
+            while batch is not None:
+                # training
+                with acc.accumulate(model):
+                    model.train()
+                    optimizer.zero_grad()
+                    rgb_static_norm,rgb_gripper_norm,actions_2d_transformed_norm = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions_2d'],train=True)     
                     obs_mask = batch['mask'][..., 0]
                     pred = model(
-                        rgb=rgb_static,
-                        hand_rgb=rgb_gripper,
+                        rgb=rgb_static_norm,
+                        hand_rgb=rgb_gripper_norm,
                         state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
                         language=batch['inst_token'],
+                        action_2d = actions_2d_transformed_norm,
                         attention_mask=obs_mask,
                     )
                     loss = {}
@@ -153,63 +131,97 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                     loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                     loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
                     loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
-                    for key in eval_log_loss:
-                        eval_log_loss[key] += loss[key].detach() / cfg['print_steps'] * eval_steps
-            # print steps log
-            if batch_idx % cfg['print_steps'] == 0 and batch_idx != 0:
-                for key in log_loss:
-                    log_loss[key] = acc.gather_for_metrics(log_loss[key]).mean()
-                for key in eval_log_loss:
-                    eval_log_loss[key] = acc.gather_for_metrics(eval_log_loss[key]).mean()
-                load_pecnt = torch.tensor(cum_load_time / (time()-clock)).to(device)
-                load_pecnt = acc.gather_for_metrics(load_pecnt).mean()
-                fps = (cfg['bs_per_gpu']*cfg['print_steps']*cfg['seq_len']) / (time()-clock)
-                fps = acc.gather_for_metrics(torch.tensor(fps).to(device)).sum()
-
-                text = 'Train Epoch: {} [{}/{} ({:.0f}%)] Reward: {:.5f} FPS:{:.5f} Load Pertentage:{:.5f} LR:{}'.format(
-                    epoch, 
-                    batch_idx * cfg['bs_per_gpu'] * acc.num_processes, 
-                    train_dataset_len, 
-                    100. * batch_idx * cfg['bs_per_gpu'] * acc.num_processes / train_dataset_len, 
-                    avg_reward,
-                    fps,
-                    load_pecnt,
-                    scheduler.get_last_lr()[0],
-                )
-                for key in log_loss:
-                    text = text + ' {}_loss: {:.5f}'.format(key, log_loss[key])
-                for key in eval_log_loss:
-                    text = text + ' eval_{}_loss: {:.5f}'.format(key, eval_log_loss[key])
-                acc.print(text)
-                # write in tensorboard
-                if acc.is_main_process:
+                    total_loss = loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] 
+                    acc.backward(total_loss)
+                    optimizer.step(optimizer)
                     for key in log_loss:
-                        writer.add_scalar(key+'_loss', log_loss[key], step)
+                        log_loss[key] += loss[key].detach() / cfg['print_steps']
+                    cum_load_time += load_time / cfg['print_steps']
+            	# evaluation test dataset
+                if batch_idx % eval_steps == 0:
+                    with torch.no_grad():
+                        model.eval()
+                        batch, _ = test_prefetcher.next_without_none()
+                        rgb_static_norm,rgb_gripper_norm,actions_2d_transformed_norm = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions_2d'],train=False)     
+                        obs_mask = batch['mask'][..., 0]
+                        pred = model(
+                            rgb=rgb_static_norm,
+                            hand_rgb=rgb_gripper_norm,
+                            state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
+                            language=batch['inst_token'],
+                            action_2d = actions_2d_transformed_norm,
+                            attention_mask=obs_mask,
+                        )
+                        loss = {}
+                        loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
+                        loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
+                        loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
+                        loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
+                        for key in eval_log_loss:
+                            eval_log_loss[key] += loss[key].detach() / cfg['print_steps'] * eval_steps
+            	# print steps log
+                if batch_idx % cfg['print_steps'] == 0 and batch_idx != 0:
+                    for key in log_loss:
+                        log_loss[key] = acc.gather_for_metrics(log_loss[key]).mean()
                     for key in eval_log_loss:
-                        writer.add_scalar('eval_'+key+'_loss', eval_log_loss[key], step)
-                    writer.add_scalar("reward", avg_reward, step)
-                    writer.add_scalar("learning rate", scheduler.get_last_lr()[0], step)
-                    writer.add_scalar("FPS", fps, step)
-                    writer.add_scalar("loading time in total time", load_pecnt, step)
-                    with open(cfg['save_path']+'step.json', 'w') as json_file:
-                        json.dump(step, json_file)
+                        eval_log_loss[key] = acc.gather_for_metrics(eval_log_loss[key]).mean()
+                    load_pecnt = torch.tensor(cum_load_time / (time()-clock)).to(device)
+                    load_pecnt = acc.gather_for_metrics(load_pecnt).mean()
+                    fps = (cfg['bs_per_gpu']*cfg['print_steps']*cfg['seq_len']) / (time()-clock)
+                    fps = acc.gather_for_metrics(torch.tensor(fps).to(device)).sum()
 
-                for key in log_loss:
-                    log_loss[key] = torch.tensor(0).float().to(device)
-                for key in eval_log_loss:
-                    eval_log_loss[key] = torch.tensor(0).float().to(device)
-                cum_load_time = 0
-                clock = time()
-                scheduler.step()
+                    text = 'Train Epoch: {} [{}/{} ({:.0f}%)] Reward: {:.5f} FPS:{:.5f} Load Pertentage:{:.5f} LR:{}'.format(
+                        epoch, 
+                        batch_idx * cfg['bs_per_gpu'] * acc.num_processes, 
+                        train_dataset_len, 
+                        100. * batch_idx * cfg['bs_per_gpu'] * acc.num_processes / train_dataset_len, 
+                        avg_reward,
+                        fps,
+                        load_pecnt,
+                        scheduler.get_last_lr()[0],
+                    )
+                    for key in log_loss:
+                        text = text + ' {}_loss: {:.5f}'.format(key, log_loss[key])
+                    for key in eval_log_loss:
+                        text = text + ' eval_{}_loss: {:.5f}'.format(key, eval_log_loss[key])
+                    acc.print(text)
+                    # write in tensorboard
+                    if acc.is_main_process:
+                        for key in log_loss:
+                            writer.add_scalar(key+'_loss', log_loss[key], step)
+                        for key in eval_log_loss:
+                            writer.add_scalar('eval_'+key+'_loss', eval_log_loss[key], step)
+                        writer.add_scalar("reward", avg_reward, step)
+                        writer.add_scalar("learning rate", scheduler.get_last_lr()[0], step)
+                        writer.add_scalar("FPS", fps, step)
+                        writer.add_scalar("loading time in total time", load_pecnt, step)
+                        with open(cfg['save_path']+'step.json', 'w') as json_file:
+                            json.dump(step, json_file)
 
-            batch_idx += 1
-            step += 1
-            batch, load_time = train_prefetcher.next()
-            '''
-            prof.step()
-            if batch_idx == 28:
-                prof.stop()
-            '''
+                    for key in log_loss:
+                        log_loss[key] = torch.tensor(0).float().to(device)
+                    for key in eval_log_loss:
+                        eval_log_loss[key] = torch.tensor(0).float().to(device)
+                    cum_load_time = 0
+                    clock = time()
+                    scheduler.step()
+                
+                pbar.set_postfix(
+                    ordered_dict={
+                        "epoch": epoch,
+                        "total loss": total_loss.item(),
+                        "lr": scheduler.get_last_lr()[0],
+                    }
+                )
+                pbar.update(cfg['bs_per_gpu']*acc.num_processes)
+                batch_idx += 1
+                step += 1
+                batch, load_time = train_prefetcher.next()
+                '''
+                prof.step()
+                if batch_idx == 28:
+                    prof.stop()
+                '''
 
 if __name__ == '__main__':
     # Preparation
@@ -253,7 +265,7 @@ if __name__ == '__main__':
         batch_size=cfg['bs_per_gpu'], # to be flattened in prefetcher  
         num_workers=cfg['workers_per_gpu'],
         pin_memory=True, # Accelerate data reading
-        shuffle=True,
+        shuffle=False,
         prefetch_factor=cfg['prefetch_factor'],
         persistent_workers=True,
     ) 
@@ -262,7 +274,7 @@ if __name__ == '__main__':
         batch_size=cfg['bs_per_gpu'], # to be flattened in prefetcher  
         num_workers=cfg['workers_per_gpu'],
         pin_memory=True, # Accelerate data reading
-        shuffle=True,
+        shuffle=False,
         prefetch_factor=cfg['prefetch_factor'],
         persistent_workers=True,
     ) 
@@ -291,6 +303,7 @@ if __name__ == '__main__':
         },
         without_norm_pixel_loss=False,
         use_hand_rgb=True,
+        use_2d_traj=False,
         n_layer=cfg['n_layer'],
         n_head=cfg['n_head'],
         n_inner=4*cfg['embed_dim'],
