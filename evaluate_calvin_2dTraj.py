@@ -26,8 +26,8 @@ import argparse
 import json
 import logging
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
 from pathlib import Path
 import sys
 import time
@@ -36,7 +36,7 @@ from moviepy.editor import ImageSequenceClip
 from accelerate import Accelerator
 from datetime import timedelta
 from accelerate.utils import InitProcessGroupKwargs
-
+from traj_predict.model.TrajPredictPolicy import TrajPredictPolicy
 # This is for using the locally installed repo clone when using slurm
 from calvin_agent.models.calvin_base_model import CalvinBaseModel
 
@@ -56,13 +56,13 @@ from termcolor import colored
 import torch
 from tqdm.auto import tqdm
 
-from evaluation.calvin_evaluation import GR1CalvinEvaluation
+from evaluation.calvin_evaluation_traj import GR1CalvinEvaluation
 from utils.calvin_utils import print_and_save
 import clip
 from PreProcess import PreProcess
 import models.vision_transformer as vits
-from models.gr1 import GR1 
-
+from models.gr1_2d import GR1 
+import cv2
 logger = logging.getLogger(__name__)
 
 os.environ["FFMPEG_BINARY"] = "auto-detect"
@@ -76,7 +76,7 @@ def make_env(dataset_path, observation_space, device):
     return env
 
 
-def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequences, num_procs, procs_id, eval_dir=None, debug=False):
+def evaluate_policy(model,env, eval_sr_path, eval_result_path, ep_len, num_sequences, num_procs, procs_id, eval_dir=None, debug=False,sub_procs_times=1):
     conf_dir = Path(f"{CALVIN_ROOT}/calvin_models") / "conf"
     task_cfg = OmegaConf.load(conf_dir / "callbacks/rollout/tasks/new_playtable_tasks.yaml")
     task_oracle = hydra.utils.instantiate(task_cfg)
@@ -92,7 +92,7 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
 
     sequence_i = 0
     for initial_state, eval_sequence in eval_sequences:
-        result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len)
+        result = evaluate_sequence(env, model,task_oracle, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len)
         results.append(result)
         if not debug:
             success_list = count_success(results)
@@ -113,7 +113,7 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
     return results
 
 
-def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len):
+def evaluate_sequence(env, model,task_checker, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len):
     robot_obs, scene_obs = get_env_state_for_initial_condition(initial_state)
     env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
     success_counter = 0
@@ -124,7 +124,7 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         print(f"Evaluating sequence: {' -> '.join(eval_sequence)}")
         print("Subtask: ", end="")
     for subtask_i, subtask in enumerate(eval_sequence):
-        success = rollout(env, model, task_checker, subtask, val_annotations, debug, eval_dir, subtask_i, sequence_i, ep_len)
+        success = rollout(env, model,task_checker, subtask, val_annotations, debug, eval_dir, subtask_i, sequence_i, ep_len)
         if success:
             success_counter += 1
         else:
@@ -145,12 +145,15 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
     unfinished = 0
     for step in range(ep_len):
         if unfinished == 0:
-            action = model.step(obs, lang_annotation)
+            action,re_out_action = model.step(obs, lang_annotation)
             unfinished = action.shape[0]
         obs, _, _, current_info = env.step(action[-unfinished])
         unfinished -= 1
         if debug:
+            # inference traj inference
             img_copy = copy.deepcopy(obs['rgb_obs']['rgb_static'])
+            for point_2d in re_out_action[0]:
+                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
             img_list.append(img_copy)
         # check if current step solves a task
         current_task_info = task_oracle.get_task_info_for_set(start_info, current_info, {subtask})
@@ -169,10 +172,10 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('configs_fsc.json'))
-    # The timeout here is 36000s to wait for other processes to finish the simulation
-    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=36000))
-    acc = Accelerator(kwargs_handlers=[kwargs])
+    cfg = json.load(open('configs_eval_2dTraj.json'))
+    # The timeout here is 3600s to wait for other processes to finish the simulation
+    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
+    acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])
     device = acc.device
     preprocessor = PreProcess(
         cfg['rgb_static_pad'],
@@ -224,7 +227,20 @@ def main():
         acc.print('load ', cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))
     if cfg['compile_model']:
         model = torch.compile(model)
-    model = acc.prepare(model, device_placement=[True])
+    model_traj = TrajPredictPolicy(model_mae,model_clip)
+    # 预训练模型读入
+    model_path_traj = "Save/diffusion_2D_trajectory/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
+    state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
+    new_state_dict = {}
+    for key, value in state_dict_traj.items():
+        new_key = key.replace('module.', '')
+        new_state_dict[new_key] = value
+        multi_gpu = True
+    if multi_gpu:
+        model_traj.load_state_dict(new_state_dict,strict=False)
+    else:
+        model_traj.load_state_dict(state_dict_traj,strict=False)
+    model,model_traj = acc.prepare(model, model_traj,device_placement=[True,True])
     observation_space = {
         'rgb_obs': ['rgb_static', 'rgb_gripper'], 
         'depth_obs': [], 
@@ -234,8 +250,11 @@ def main():
     eval_dir = cfg['save_path']+f'eval{torch.cuda.current_device()}/'
     os.makedirs(eval_dir, exist_ok=True)
     env = make_env('./fake_dataset', observation_space, device)
-    eva = GR1CalvinEvaluation(model, cfg, preprocessor, device)
+    
+    eva = GR1CalvinEvaluation(model, model_traj,cfg, preprocessor, device)
     model.eval()
+    model_traj.eval()
+    
     avg_reward = torch.tensor(evaluate_policy(
         eva, 
         env,
@@ -248,6 +267,7 @@ def main():
         acc.process_index,
         eval_dir,
         debug=cfg['record_evaluation_video'],
+        sub_procs_times = 2,
     )).float().mean().to(device)
     acc.wait_for_everyone()
     avg_reward = acc.gather_for_metrics(avg_reward).mean()

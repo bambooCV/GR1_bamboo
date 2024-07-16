@@ -71,6 +71,7 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         self.rgb_list = []
         self.hand_rgb_list = []
         self.state_list = []
+        self.traj_2d_list = []
         self.rollout_step_counter = 0
 
     def step(self, obs, goal):
@@ -140,12 +141,44 @@ class GR1CalvinEvaluation(CalvinBaseModel):
 
         rgb_data, hand_rgb_data = self.preprocessor.rgb_process(rgb_data, hand_rgb_data, train=False)
 
+        # 从diffusion policy获取当前的action 2d         
+        # 2d_traj_pred
+        with torch.no_grad():
+            self.noise_scheduler.set_timesteps(self.num_diffusion_iters)
+            rgb_static_norm = rgb_data[:,-1].unsqueeze(0)
+            noisy_action = torch.randn([1,30,2], device=self.device)
+            out_action = noisy_action
+            language_embedding, obs_embeddings, patch_embeddings = None, None, None
+            for k in self.noise_scheduler.timesteps:
+                # predict noise
+                noise_pred, language_embedding, obs_embeddings, patch_embeddings = self.policy_traj(rgb_static_norm, tokenized_text, timesteps=k, noisy_actions=out_action,
+                                    language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
+                # inverse diffusion step (remove noise)
+                out_action = self.noise_scheduler.step(
+                    model_output=noise_pred,
+                    timestep=k,
+                    sample=out_action
+                ).prev_sample
+            self.traj_2d_list.append(out_action.squeeze(0))
+            # Buffer 2d traj
+            if buffer_len < len(self.traj_2d_list):
+                self.traj_2d_list.pop(0)
+                assert len(self.traj_2d_list) == buffer_len
+            traj_2d = torch.zeros((1, self.seq_len, 30, 2))
+            traj_2d_tensor = torch.stack(self.traj_2d_list, dim=0)  # (t, c, h, w)
+            traj_2d[0, :buffer_len] = traj_2d_tensor
+            traj_2d = traj_2d.to(self.device)
+            re_out_action = unnormalize_data(out_action)
+        # traj_2d = torch.zeros((1, self.seq_len, 30, 2)).to(self.device)
+        # re_out_action = torch.zeros((1, 30, 2))
+        # 要添加输入的action_2d
         with torch.no_grad():
             prediction = self.policy(
                 rgb=rgb_data, 
                 hand_rgb=hand_rgb_data,
                 state=state_data,
                 language=tokenized_text,
+                action_2d = traj_2d,
                 attention_mask=attention_mask
         )
 
@@ -170,28 +203,6 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         action_pred = action_pred.detach().cpu()
 
         self.rollout_step_counter += 1
-
-        # import time
-        # start_time = time.time()
-        # traj_pred
-        self.noise_scheduler.set_timesteps(self.num_diffusion_iters)
-        rgb_static_norm = rgb_data[:,-1].unsqueeze(0)
-        noisy_action = torch.randn([1,30,2], device=self.device)
-        out_action = noisy_action
-        language_embedding, obs_embeddings, patch_embeddings = None, None, None
-        for k in self.noise_scheduler.timesteps:
-            # predict noise
-            noise_pred, language_embedding, obs_embeddings, patch_embeddings = self.policy_traj(rgb_static_norm, tokenized_text, timesteps=k, noisy_actions=out_action,
-                                language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
-            # inverse diffusion step (remove noise)
-            out_action = self.noise_scheduler.step(
-                model_output=noise_pred,
-                timestep=k,
-                sample=out_action
-            ).prev_sample
-        re_out_action = unnormalize_data(out_action)
-        # end_time = time.time()
-        # execution_time = end_time - start_time
 
         # print(f"Code block executed in {execution_time} seconds.")
         return action_pred,re_out_action

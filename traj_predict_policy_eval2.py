@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from transformers import get_scheduler
 import wandb
 from time import time
+import matplotlib.pyplot as plt
 os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
 
@@ -154,7 +155,7 @@ if __name__ == '__main__':
         wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_0626normaction')
     # config prepare
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 64
+    batch_size = 1
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
@@ -208,7 +209,7 @@ if __name__ == '__main__':
              
     model = TrajPredictPolicy()
     # 预训练模型读入
-    model_path = "Save/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
+    model_path = "Save/diffusion_2D_trajectory/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
     state_dict = torch.load(model_path,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict.items():
@@ -257,6 +258,7 @@ if __name__ == '__main__':
                 # init scheduler
                 noise_scheduler.set_timesteps(num_diffusion_iters)
                 language_embedding, obs_embeddings, patch_embeddings = None, None, None
+                # val_sample_loss_values = []
                 start_time = time()
 
                 for k in noise_scheduler.timesteps:
@@ -269,36 +271,47 @@ if __name__ == '__main__':
                         timestep=k,
                         sample=out_action
                     ).prev_sample
+                    # val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
+                    # val_sample_loss_values.append(val_sample_loss.cpu())
                 end_time = time()
                 execution_time = end_time - start_time
 
                 # print(f"Code block executed in {execution_time} seconds.")
+                # plt.figure(figsize=(10, 6))
+                # plt.plot(noise_scheduler.timesteps, val_sample_loss_values, marker='o', linestyle='-', color='b')
+                # plt.xlabel('Timestep (k)')
+                # plt.ylabel('Validation Sample Loss (MSE)')
+                # plt.title('Validation Sample Loss vs Timestep')
+                # plt.grid(True)
+                # plt.gca().invert_xaxis()  # 将横坐标从 100 到 0 反转显示
+                # plt.show()
+                
                 re_out_action = unnormalize_data(out_action)
                 val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
                 val_total_loss += val_sample_loss.item()
                 # visualization croped image
                 # ################Convert tensor to NumPy array for visualization
-                # re_out_action = re_out_action.unsqueeze(1)
-                # import cv2
-                # for batch_idx in range(image.shape[0]):
-                #     for seq_idx in range(image.shape[1]):
+                re_out_action = re_out_action.unsqueeze(1)
+                import cv2
+                for batch_idx in range(image.shape[0]):
+                    for seq_idx in range(image.shape[1]):
 
-                #         rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                #         # for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
-                #         #     cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                #         rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
-                #         # cv2.putText(rgb_static_np, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                #         cv2.imshow("Ori Cropped I mage", rgb_static_np)
+                        rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                        # for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
+                        #     cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                        rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
+                        # cv2.putText(rgb_static_np, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                        cv2.imshow("Ori Cropped I mage", rgb_static_np)
                         
-                #         rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                #         for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
-                #             cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                #         rgb_static_np2 = (rgb_static_np2 * 255).astype(np.uint8)
-                #         cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                #         cv2.imshow("Pred Cropped I mage", rgb_static_np2)
+                        rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                        for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
+                            cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                        rgb_static_np2 = (rgb_static_np2 * 255).astype(np.uint8)
+                        cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                        cv2.imshow("Pred Cropped I mage", rgb_static_np2)
                         
                         
-                #         cv2.waitKey(0)
+                        cv2.waitKey(0)
                 batch, load_time = val_prefetcher.next()
                 val_index = val_index + 1
                 pbar.update(1)
