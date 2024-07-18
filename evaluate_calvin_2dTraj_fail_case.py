@@ -57,7 +57,7 @@ import torch
 from tqdm.auto import tqdm
 
 from evaluation.calvin_evaluation_traj import GR1CalvinEvaluation
-from utils.calvin_utils import print_and_save
+from utils.calvin_utils import print_and_save,print_and_save_json
 import clip
 from PreProcess import PreProcess
 import models.vision_transformer as vits
@@ -114,6 +114,7 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
                 )
             else:
                 sequence_i += 1
+        print_and_save_json(results, eval_sequences, eval_result_path, None)
     else:
         for initial_state, eval_sequence in eval_sequences:
 
@@ -133,12 +134,31 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
                 )
             else:
                 sequence_i += 1
-    print_and_save(results, eval_sequences, eval_result_path, None)
+        print_and_save(results, eval_sequences, eval_result_path, None)
     return results
 
 
 def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len):
     robot_obs, scene_obs = get_env_state_for_initial_condition(initial_state)
+    robot_obs = np.array(
+        [
+            0.02586889,
+            -0.2313129,
+            0.5712808,
+            3.09045411,
+            -0.02908596,
+            1.50013585,
+            0.07999963,
+            -1.21779124,
+            1.03987629,
+            2.11978254,
+            -2.34205014,
+            -0.87015899,
+            1.64119093,
+            0.55344928,
+            1.0,
+        ]
+    )
     env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
     success_counter = 0
     if debug:
@@ -178,6 +198,9 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
             img_copy = copy.deepcopy(obs['rgb_obs']['rgb_static'])
             for point_2d in re_out_action[0]:
                 cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+            # cv2.imshow("Pred Image", img_copy)          
+            # cv2.waitKey(0)
+                
             img_list.append(img_copy)
         # check if current step solves a task
         current_task_info = task_oracle.get_task_info_for_set(start_info, current_info, {subtask})
@@ -186,6 +209,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
                 print(colored("success", "green"), end=" ")
                 clip = ImageSequenceClip(img_list, fps=30)
                 clip.write_gif(os.path.join(eval_dir, f'{sequence_i}-{subtask_i}-{subtask}-succ.gif'), fps=30)
+                print(obs["robot_obs"])
             return True
     if debug:
         print(colored("fail", "red"), end=" ")
@@ -196,7 +220,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('configs_eval_2dTraj.json'))
+    cfg = json.load(open('configs_eval_2dTraj_fail_case.json'))
     # The timeout here is 36000s to wait for other processes to finish the simulation
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
     acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])
@@ -283,8 +307,7 @@ def main():
         eva, 
         env,
         cfg['save_path']+'success_rate.txt', 
-        # cfg['save_path']+'result.txt', 
-        cfg['save_path']+'result', 
+        cfg['save_path']+'result.txt', 
         cfg['ep_len'],
         cfg['num_sequences'],
         acc.num_processes,

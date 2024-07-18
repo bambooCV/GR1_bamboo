@@ -1,5 +1,6 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import math
 import json
 from time import time
@@ -16,11 +17,11 @@ from torch.utils.tensorboard import SummaryWriter
 import clip
 from LMDBDataset_jpeg import LMDBDataset as LMDBdst_jpeg
 from LMDBDataset_jpeg import DataPrefetcher as DataPrefetcher_jpeg
-from PreProcess import PreProcess
+from traj_predict.traj_func import PreProcess
 import models.vision_transformer as vits
-from models.gr1 import GR1 
-from AccelerateFix import AsyncStep
+from models.gr1_2d import GR1 
 from tqdm import tqdm
+from AccelerateFix import AsyncStep
 # fsc
 def masked_loss(pred, target, mask, skip_frame=0, loss_func=F.mse_loss):
     if skip_frame == 0:
@@ -116,13 +117,14 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                 with acc.accumulate(model):
                     model.train()
                     optimizer.zero_grad()
-                    rgb_static, rgb_gripper = preprocessor.rgb_process(batch['rgb_static'], batch['rgb_gripper'], train=True)
+                    rgb_static_norm,rgb_gripper_norm,actions_2d_transformed_norm = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions_2d'],train=True)     
                     obs_mask = batch['mask'][..., 0]
                     pred = model(
-                        rgb=rgb_static,
-                        hand_rgb=rgb_gripper,
+                        rgb=rgb_static_norm,
+                        hand_rgb=rgb_gripper_norm,
                         state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
                         language=batch['inst_token'],
+                        action_2d = actions_2d_transformed_norm,
                         attention_mask=obs_mask,
                     )
                     loss = {}
@@ -141,13 +143,14 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                     with torch.no_grad():
                         model.eval()
                         batch, _ = test_prefetcher.next_without_none()
-                        rgb_static, rgb_gripper = preprocessor.rgb_process(batch['rgb_static'], batch['rgb_gripper'], train=False)
+                        rgb_static_norm,rgb_gripper_norm,actions_2d_transformed_norm = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions_2d'],train=False)     
                         obs_mask = batch['mask'][..., 0]
                         pred = model(
-                            rgb=rgb_static,
-                            hand_rgb=rgb_gripper,
+                            rgb=rgb_static_norm,
+                            hand_rgb=rgb_gripper_norm,
                             state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
                             language=batch['inst_token'],
+                            action_2d = actions_2d_transformed_norm,
                             attention_mask=obs_mask,
                         )
                         loss = {}
@@ -223,12 +226,13 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('configs_for_continus_train_test.json'))
+    cfg = json.load(open('configs_2dTraj.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     acc = Accelerator(
         gradient_accumulation_steps=cfg['gradient_accumulation_steps'],
+        mixed_precision="bf16",
         kwargs_handlers=[init_pg_kwargs, ddp_kwargs]
     )
     device = acc.device
@@ -301,6 +305,7 @@ if __name__ == '__main__':
         },
         without_norm_pixel_loss=False,
         use_hand_rgb=True,
+        use_2d_traj=True,
         n_layer=cfg['n_layer'],
         n_head=cfg['n_head'],
         n_inner=4*cfg['embed_dim'],

@@ -145,7 +145,8 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         # 2d_traj_pred
         with torch.no_grad():
             self.noise_scheduler.set_timesteps(self.num_diffusion_iters)
-            rgb_static_norm = rgb_data[:,-1].unsqueeze(0)
+            rgb_static_norm = rgb_data[:,len(self.rgb_list)-1].unsqueeze(0)
+            # rgb_static_norm = rgb_data[:,-1].unsqueeze(0)
             noisy_action = torch.randn([1,30,2], device=self.device)
             out_action = noisy_action
             language_embedding, obs_embeddings, patch_embeddings = None, None, None

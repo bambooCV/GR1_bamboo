@@ -1,0 +1,103 @@
+[
+    {
+        "sequence_number": 5,
+        "state": {
+            "led": 1,
+            "lightbulb": 1,
+            "slider": "left",
+            "drawer": "open",
+            "red_block": "slider_right",
+            "blue_block": "table",
+            "pink_block": "table",
+            "grasped": 0
+        },
+        "result": [
+            "push_blue_block_left",
+            "close_drawer",
+            "lift_red_block_slider",
+            "place_in_slider",
+            "turn_off_lightbulb"
+        ]
+    },
+    {
+        "sequence_number": 9,
+        "state": {
+            "led": 1,
+            "lightbulb": 0,
+            "slider": "left",
+            "drawer": "open",
+            "red_block": "table",
+            "blue_block": "table",
+            "pink_block": "slider_left",
+            "grasped": 0
+        },
+        "result": [
+            "push_red_block_left",
+            "lift_blue_block_table",
+            "place_in_slider",
+            "turn_on_lightbulb",
+            "move_slider_right"
+        ]
+    },
+    {
+        "sequence_number": 10,
+        "state": {
+            "led": 0,
+            "lightbulb": 1,
+            "slider": "left",
+            "drawer": "open",
+            "red_block": "slider_right",
+            "blue_block": "table",
+            "pink_block": "slider_left",
+            "grasped": 0
+        },
+        "result": [
+            "rotate_blue_block_left",
+            "lift_blue_block_table",
+            "place_in_drawer",
+            "move_slider_right",
+            "turn_off_lightbulb"
+        ]
+    },
+    {
+        "sequence_number": 11,
+        "state": {
+            "led": 1,
+            "lightbulb": 0,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "slider_right",
+            "blue_block": "table",
+            "pink_block": "slider_left",
+            "grasped": 0
+        },
+        "result": [
+            "lift_pink_block_slider",
+            "place_in_slider",
+            "turn_on_lightbulb",
+            "rotate_blue_block_right",
+            "open_drawer"
+        ]
+    },
+    {
+        "sequence_number": 15,
+        "state": {
+            "led": 0,
+            "lightbulb": 0,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "slider_left",
+            "blue_block": "table",
+            "pink_block": "table",
+            "grasped": 0
+        },
+        "result": [
+            "move_slider_left",
+            "push_pink_block_left",
+            "open_drawer",
+            "turn_on_lightbulb",
+            "lift_blue_block_table"
+        ]
+    }
+
+]
