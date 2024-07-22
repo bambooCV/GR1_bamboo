@@ -122,7 +122,7 @@ class PreProcess():
         new_action_2d = resize_points(new_action_2d, (200,200), (224,224))
         rgb_static = self.resize(rgb_static)
         rgb_gripper = self.resize(rgb_gripper)
-        # import cv2, numpy as np
+        # import cv2
         # for batch_idx in range(rgb_static.shape[0]):
         #     for seq_idx in range(rgb_static.shape[1]):
         #         rgb_static_rgb = cv2.cvtColor(rgb_static_ori[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
@@ -136,7 +136,9 @@ class PreProcess():
         #             cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
         #         cv2.imshow('resize RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
         #         cv2.waitKey(0)
-        new_action_2d = normalize_data(new_action_2d)
+        
+        # 归一化
+        # new_action_2d = normalize_data(new_action_2d)
         # torchvision Normalize forces sync between CPU and GPU, so we use our own
         rgb_static = (rgb_static - self.rgb_mean) / (self.rgb_std + 1e-6)
         rgb_gripper = (rgb_gripper - self.rgb_mean) / (self.rgb_std + 1e-6)

@@ -27,7 +27,7 @@ import json
 import logging
 import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from pathlib import Path
 import sys
 import time
@@ -84,6 +84,7 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
     eval_dir = get_log_dir(eval_dir)
     if json_loaded:
         eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
+        # eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_1000.json")
     else:
         eval_sequences = get_sequences(num_sequences)
     num_seq_per_procs = num_sequences // num_procs
@@ -196,10 +197,12 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
         if debug:
             # inference traj inference
             img_copy = copy.deepcopy(obs['rgb_obs']['rgb_static'])
-            for point_2d in re_out_action[0]:
+            img_copy_vis = cv2.cvtColor(img_copy, cv2.COLOR_BGR2RGB)
+            for point_2d in re_out_action:
+                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
                 cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-            # cv2.imshow("Pred Image", img_copy)          
-            # cv2.waitKey(0)
+            cv2.imshow("Pred Image Final", img_copy_vis)          
+            cv2.waitKey(0)
                 
             img_list.append(img_copy)
         # check if current step solves a task
@@ -209,7 +212,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
                 print(colored("success", "green"), end=" ")
                 clip = ImageSequenceClip(img_list, fps=30)
                 clip.write_gif(os.path.join(eval_dir, f'{sequence_i}-{subtask_i}-{subtask}-succ.gif'), fps=30)
-                print(obs["robot_obs"])
+                # print(obs["robot_obs"])
             return True
     if debug:
         print(colored("fail", "red"), end=" ")
@@ -258,6 +261,7 @@ def main():
         },
         without_norm_pixel_loss=False,
         use_hand_rgb=True,
+        use_2d_traj=True,
         n_layer=cfg['n_layer'],
         n_head=cfg['n_head'],
         n_inner=4*cfg['embed_dim'],

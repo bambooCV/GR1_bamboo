@@ -12,6 +12,10 @@ from torch.utils.data import DataLoader
 from traj_predict.traj_func import PreProcess
 ORIGINAL_STATIC_RES = 200
 ORIGINAL_GRIPPER_RES = 84
+def add_noise(sequence, noise_level=2.0):
+    noise = torch.randn(sequence.shape) * noise_level
+    noisy_sequence = sequence + noise
+    return noisy_sequence
 def resample_sequence(sequence, target_length):
     """
     使用插值将 sequence 重新采样到 target_length，并将结果四舍五入为整数
@@ -24,7 +28,7 @@ def resample_sequence(sequence, target_length):
     sequence = sequence.unsqueeze(0).permute(0, 2, 1)  # 调整形状为 (1, 2, N)
     resampled_sequence = F.interpolate(sequence, size=target_length, mode='linear', align_corners=True)
     resampled_sequence = resampled_sequence.permute(0, 2, 1).squeeze(0)  # 调整回原始形状 (target_length, 2)
-    
+    resampled_sequence = add_noise(resampled_sequence, noise_level=0.75)
     # 将结果四舍五入为整数
     resampled_sequence = torch.round(resampled_sequence).int()
     
@@ -122,7 +126,8 @@ class LMDBDataset(Dataset):
                         elif self.action_mode == 'ee_abs_pose':
                             actions[i, j] = loads(self.txn.get(f'abs_action_{idx+i+j}'.encode()))
                         actions[i, j, -1] = (actions[i, j, -1] + 1) / 2
-                future_2d_actions = loads(self.txn.get(f'traj_2d_{idx+i}'.encode()))
+                # future_2d_actions = loads(self.txn.get(f'traj_2d_{idx+i}'.encode()))
+                future_2d_actions = loads(self.txn.get(f'traj_2d_init_{cur_episode}'.encode())) # 只用当前episode的2d action 为了和inference保持一致 且快速验证
                 actions_2d[i] = resample_sequence(future_2d_actions[:,:2], 30)
                 
         return {
@@ -174,7 +179,8 @@ if __name__ == '__main__':
         batch_size=cfg['bs_per_gpu'], # to be flattened in prefetcher  
         num_workers=cfg['workers_per_gpu'],
         pin_memory=True, # Accelerate data reading
-        shuffle=True,
+        # shuffle=True,
+        shuffle=False,
         prefetch_factor=cfg['prefetch_factor'],
         persistent_workers=True,
     ) 

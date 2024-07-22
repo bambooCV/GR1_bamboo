@@ -31,6 +31,7 @@ def unnormalize_data(ndata, stats={'min': 0,'max': 224}):
     ndata = (ndata + 1) / 2 # [-1, 1] -> [0, 1] 域
     data = ndata * (stats['max'] - stats['min']) + stats['min']
     return data
+
 class GR1CalvinEvaluation(CalvinBaseModel):
     def __init__(self,
                  policy,
@@ -142,34 +143,40 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         rgb_data, hand_rgb_data = self.preprocessor.rgb_process(rgb_data, hand_rgb_data, train=False)
 
         # 从diffusion policy获取当前的action 2d         
-        # 2d_traj_pred
-        with torch.no_grad():
-            self.noise_scheduler.set_timesteps(self.num_diffusion_iters)
-            rgb_static_norm = rgb_data[:,len(self.rgb_list)-1].unsqueeze(0)
-            # rgb_static_norm = rgb_data[:,-1].unsqueeze(0)
-            noisy_action = torch.randn([1,30,2], device=self.device)
-            out_action = noisy_action
-            language_embedding, obs_embeddings, patch_embeddings = None, None, None
-            for k in self.noise_scheduler.timesteps:
-                # predict noise
-                noise_pred, language_embedding, obs_embeddings, patch_embeddings = self.policy_traj(rgb_static_norm, tokenized_text, timesteps=k, noisy_actions=out_action,
-                                    language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
-                # inverse diffusion step (remove noise)
-                out_action = self.noise_scheduler.step(
-                    model_output=noise_pred,
-                    timestep=k,
-                    sample=out_action
-                ).prev_sample
-            self.traj_2d_list.append(out_action.squeeze(0))
-            # Buffer 2d traj
-            if buffer_len < len(self.traj_2d_list):
-                self.traj_2d_list.pop(0)
-                assert len(self.traj_2d_list) == buffer_len
-            traj_2d = torch.zeros((1, self.seq_len, 30, 2))
-            traj_2d_tensor = torch.stack(self.traj_2d_list, dim=0)  # (t, c, h, w)
-            traj_2d[0, :buffer_len] = traj_2d_tensor
-            traj_2d = traj_2d.to(self.device)
-            re_out_action = unnormalize_data(out_action)
+        # 2d_traj_pred #only do one time for each episode
+        if len(self.traj_2d_list) == 0:
+            with torch.no_grad():
+                self.noise_scheduler.set_timesteps(self.num_diffusion_iters)
+                rgb_static_norm = rgb_data[:,len(self.rgb_list)-1].unsqueeze(0)
+                # rgb_static_norm = rgb_data[:,-1].unsqueeze(0)
+                noisy_action = torch.randn([1,30,2], device=self.device)
+                out_action = noisy_action
+                language_embedding, obs_embeddings, patch_embeddings = None, None, None
+                for k in self.noise_scheduler.timesteps:
+                    # predict noise
+                    noise_pred, language_embedding, obs_embeddings, patch_embeddings = self.policy_traj(rgb_static_norm, tokenized_text, timesteps=k, noisy_actions=out_action,
+                                        language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
+                    # inverse diffusion step (remove noise)
+                    out_action = self.noise_scheduler.step(
+                        model_output=noise_pred,
+                        timestep=k,
+                        sample=out_action
+                    ).prev_sample
+                
+                re_out_action = unnormalize_data(out_action)
+                self.traj_2d_list.append(re_out_action.squeeze(0))
+        else:
+            self.traj_2d_list.append(self.traj_2d_list[-1])
+        # Buffer 2d traj
+        if buffer_len < len(self.traj_2d_list):
+            self.traj_2d_list.pop(0)
+            assert len(self.traj_2d_list) == buffer_len
+        traj_2d = torch.zeros((1, self.seq_len, 30, 2))
+        traj_2d_tensor = torch.stack(self.traj_2d_list, dim=0)  # (t, c, h, w)
+        traj_2d[0, :buffer_len] = traj_2d_tensor
+        traj_2d = traj_2d.to(self.device)
+        re_out_action = self.traj_2d_list[-1]
+        
         # traj_2d = torch.zeros((1, self.seq_len, 30, 2)).to(self.device)
         # re_out_action = torch.zeros((1, 30, 2))
         # 要添加输入的action_2d
@@ -182,7 +189,63 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 action_2d = traj_2d,
                 attention_mask=attention_mask
         )
+        # visualization image
+        p = 16
+        h_p = 14
+        w_p = 14
+        rgb_vis= rgb_data.reshape(shape=(rgb_data.shape[0], rgb_data.shape[1], 3, h_p, p, w_p, p)) 
+        rgb_vis = rgb_vis.permute(0, 1, 3, 5, 4, 6, 2)
+        rgb_vis = rgb_vis.reshape(shape=(rgb_vis.shape[0], rgb_vis.shape[1], h_p * w_p, (p**2) * 3))  # (b, t, n_patches, p*p*3)
+        mean = rgb_vis.mean(dim=-1, keepdim=True)
+        std = rgb_vis.var(dim=-1, unbiased=True, keepdim=True).sqrt() + 1e-6
+        
+        #patches
+        action_2d = torch.round(re_out_action).int()
+        action_2d = torch.clamp(action_2d, min=0, max=223)
+        num_patches_per_row = 224 // 16
+        patch_row = action_2d[...,1] // 16
+        patch_col = action_2d[...,0] // 16
+        patch_index = patch_row * num_patches_per_row + patch_col
 
+        patch_image = torch.zeros(prediction["obs_targets"].shape).to(self.device)
+        patch_index_expanded = patch_index.unsqueeze(0).unsqueeze(1).expand(patch_image.shape[0], patch_image.shape[1], -1)
+        patch_image.scatter_(2, patch_index_expanded.long().unsqueeze(-1).expand(-1, -1, -1, patch_image.shape[-1]), 255)
+        #reshape 196 to 224*224
+        patch_image = patch_image.reshape(rgb_vis.shape[0], rgb_vis.shape[1], h_p, w_p, p, p, 3)
+        patch_image = patch_image.permute(0, 1, 6, 2, 4, 3, 5)
+        patch_image = patch_image.reshape(rgb_vis.shape[0], rgb_vis.shape[1], 3, h_p * p, w_p * p)
+
+        
+        obs_targets = prediction["obs_targets"]
+        obs_targets = obs_targets * std + mean
+        obs_targets = obs_targets.reshape(rgb_vis.shape[0], rgb_vis.shape[1], h_p, w_p, p, p, 3)
+        # 调整维度以匹配原始图像格式
+        obs_targets = obs_targets.permute(0, 1, 6, 2, 4, 3, 5)
+        obs_targets = obs_targets.reshape(rgb_vis.shape[0], rgb_vis.shape[1], 3, h_p * p, w_p * p)
+        obs_targets = self.preprocessor.rgb_recovery(obs_targets)
+        
+        
+        obs_preds = prediction["obs_preds"]
+        obs_preds = obs_preds * std + mean
+        obs_preds = obs_preds.reshape(rgb_vis.shape[0], rgb_vis.shape[1], h_p, w_p, p, p, 3)
+        # 调整维度以匹配原始图像格式
+        obs_preds = obs_preds.permute(0, 1, 6, 2, 4, 3, 5)
+        obs_preds = obs_preds.reshape(rgb_vis.shape[0], rgb_vis.shape[1], 3, h_p * p, w_p * p)
+        obs_preds = self.preprocessor.rgb_recovery(obs_preds)
+        
+        import cv2
+        for batch_idx in range(obs_targets.shape[0]):
+            # for seq_idx in range(obs_targets.shape[1]):
+            seq_idx = len(self.rgb_list)-1
+            rgb_static_ori = cv2.cvtColor(obs_targets[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+            rgb_static_pred = cv2.cvtColor(obs_preds[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+            rgb_static_attention = cv2.cvtColor(patch_image[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+            cv2.imshow('original RGB Static Image', rgb_static_ori)  # 注意这里需要调整回 HWC 格式
+            cv2.imshow('predicted RGB Static Image', rgb_static_pred)  # 注意这里需要调整回 HWC 格式
+            cv2.imshow('attention RGB Static Image', rgb_static_attention)  # 注意这里需要调整回 HWC 格式
+            # cv2.waitKey(0)
+
+        
         # Arm action
         arm_action_preds = prediction['arm_action_preds']  # (1, t, chunk_size, act_dim - 1)
         arm_action_preds = arm_action_preds.view(-1, self.chunk_size, self.act_dim - 1)  # (t, chunk_size, act_dim - 1)

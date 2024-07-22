@@ -55,3 +55,9 @@ class PreProcess():
         rgb_static = (rgb_static - self.rgb_mean) / (self.rgb_std + 1e-6)
         rgb_gripper = (rgb_gripper - self.rgb_mean) / (self.rgb_std + 1e-6)
         return rgb_static, rgb_gripper
+
+    def rgb_recovery(self, rgb_static):
+        rgb_static = (rgb_static * (self.rgb_std + 1e-6)) + self.rgb_mean
+        rgb_static = rgb_static.clamp(0, 1)
+        rgb_static = (rgb_static*255.).byte()
+        return rgb_static

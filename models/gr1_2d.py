@@ -67,7 +67,8 @@ class GR1(nn.Module):
             dim_head=resampler_params['dim_head'],
             heads=resampler_params['heads'],
             num_latents=self.n_patch_latents,
-            num_media_embeds=resampler_params['num_media_embeds'])        
+            num_media_embeds=resampler_params['num_media_embeds']) 
+    
 
         # CLIP for language encoding
         self.model_clip = model_clip
@@ -105,7 +106,17 @@ class GR1(nn.Module):
         self.embed_gripper_state = torch.nn.Linear(2, hidden_size) # one-hot gripper state
         self.embed_state = torch.nn.Linear(2*hidden_size, hidden_size)
         if self.use_2d_traj:
-            self.embed_traj_2d = torch.nn.Linear(2, hidden_size)
+            # self.embed_traj_2d = torch.nn.Linear(2, hidden_size)
+            self.embed_traj_2d = nn.Embedding(224, hidden_size) # 224 是索引范围
+            
+            self.n_patch_latents_2d = resampler_params['num_latents']
+            self.perceiver_resampler_2d = PerceiverResampler(
+                dim=patch_feat_dim,
+                depth=resampler_params['depth'],
+                dim_head=resampler_params['dim_head'],
+                heads=resampler_params['heads'],
+                num_latents=self.n_patch_latents_2d,
+                num_media_embeds=resampler_params['num_media_embeds']) 
         
         # Relative timestep embedding
         self.embed_timestep = nn.Embedding(self.sequence_length, hidden_size)
@@ -169,7 +180,7 @@ class GR1(nn.Module):
         gripper_action_preds = None
 
         batch_size, sequence_length, c, h, w = rgb.shape
-        
+
         # Embed state
         arm_state = state['arm']
         gripper_state = state['gripper']
@@ -210,12 +221,41 @@ class GR1(nn.Module):
                     # norm the target 
                     obs_hand_targets = (obs_hand_targets - obs_hand_targets.mean(dim=-1, keepdim=True)
                         ) / (obs_hand_targets.var(dim=-1, unbiased=True, keepdim=True).sqrt() + 1e-6)            
-
+        if self.use_2d_traj:
+            action_2d = torch.round(action_2d).int()
+            action_2d = torch.clamp(action_2d, min=0, max=223)
+            num_patches_per_row = 224 // 16
+            patch_row = action_2d[...,1] // 16
+            patch_col = action_2d[...,0] // 16
+            patch_index = patch_row * num_patches_per_row + patch_col
+            masked_patch = torch.zeros((batch_size,sequence_length,patch_embeddings.shape[-2])).to(device=patch_embeddings.device)
+            for patch_index_i in range(patch_index.size(0)):
+                for patch_index_j in range(patch_index.size(1)):
+                    # 获取当前序列中的索引
+                    indices = patch_index[patch_index_i, patch_index_j]
+                    # 将 masked_patch 中对应位置设为 1
+                    masked_patch[patch_index_i, patch_index_j, indices] = 1
+            selected_patch_embeddings = patch_embeddings * masked_patch.view(batch_size*sequence_length, -1).unsqueeze(-1)
+            selected_patch_embeddings = selected_patch_embeddings.unsqueeze(1)  # (b * t, 1, n_patches, patch_feat_dim)
+            selected_patch_embeddings = self.perceiver_resampler_2d(selected_patch_embeddings)  # (b * t, 1, n_patch_latents, patch_feat_dim)
+            selected_patch_embeddings = selected_patch_embeddings.squeeze(1)  # (b * t, n_patch_latents, patch_feat_dim)
+            selected_patch_embeddings = selected_patch_embeddings.view(batch_size, sequence_length, self.n_patch_latents_2d, self.patch_feat_dim) 
+            # idea1 把坐标点embedding 作为resampler信号
+            # x_embeddings = self.embed_traj_2d(action_2d[:, :, :, 0])
+            # y_embeddings = self.embed_traj_2d(action_2d[:, :, :, 1])
+            # embed_traj_2d = torch.cat((x_embeddings, y_embeddings), dim=-1)
+            # embed_traj_2d = embed_traj_2d.view(batch_size*sequence_length, -1,embed_traj_2d.shape[-1])  # (b*t,points_num, h)
+            # # action_2d_traj = action_2d_traj + time_embeddings.view(sequence_length, 1, self.hidden_size)
+            # # stacked_inputs = torch.cat((stacked_inputs, action_2d_traj), dim=2) 
+            # # 把轨迹点和patch特征拼接起来作为perceiver的输入
+            # patch_embeddings = torch.concat((patch_embeddings, embed_traj_2d), dim=1) 
         # Use resampler to process patch embeddings
         patch_embeddings = patch_embeddings.unsqueeze(1)  # (b * t, 1, n_patches, patch_feat_dim)
         patch_embeddings = self.perceiver_resampler(patch_embeddings)  # (b * t, 1, n_patch_latents, patch_feat_dim)
         patch_embeddings = patch_embeddings.squeeze(1)  # (b * t, n_patch_latents, patch_feat_dim)
         patch_embeddings = patch_embeddings.view(batch_size, sequence_length, self.n_patch_latents, self.patch_feat_dim)  # (b, t, n_patch_latents, patch_feat_dim)
+        if self.use_2d_traj:
+            patch_embeddings = torch.cat((patch_embeddings, selected_patch_embeddings), dim=2) 
         if self.use_hand_rgb:
             hand_patch_embeddings = hand_patch_embeddings.unsqueeze(1)
             hand_patch_embeddings = self.perceiver_resampler(hand_patch_embeddings)
@@ -254,10 +294,7 @@ class GR1(nn.Module):
                 (stacked_inputs,
                  hand_patch_embeddings, 
                  hand_obs_embeddings), dim=2)  # (b, t, n_tokens, h)
-        if self.use_2d_traj:
-            action_2d_traj = self.embed_traj_2d(action_2d)
-            action_2d_traj = action_2d_traj + time_embeddings.view(sequence_length, 1, self.hidden_size)
-            stacked_inputs = torch.cat((stacked_inputs, action_2d_traj), dim=2) 
+
             
         if self.act_pred:
             action_queries = self.action_queries.weight  # (1, h)
@@ -276,16 +313,19 @@ class GR1(nn.Module):
         # Number of tokens
         n_lang_tokens = 1
         n_state_tokens = 1
+        if self.use_2d_traj:
+            n_patch_2d_tokens = self.n_patch_latents_2d
         n_patch_tokens = self.n_patch_latents
         n_obs_tokens = 1
         n_hand_patch_tokens = self.n_patch_latents
         n_hand_obs_tokens = 1
         n_tokens = n_lang_tokens + n_state_tokens + n_patch_tokens + n_obs_tokens
+        if self.use_2d_traj:
+            n_tokens += n_patch_2d_tokens
         if self.use_hand_rgb:
             n_tokens += n_hand_obs_tokens
             n_tokens += n_hand_patch_tokens
-        if self.use_2d_traj:
-            n_tokens += 30
+
         n_act_pred_tokens = self.chunk_size
         if self.act_pred:
             act_query_token_start_i = n_tokens
@@ -304,11 +344,11 @@ class GR1(nn.Module):
         # Attention mask 把output屏蔽
         stacked_attention_mask = attention_mask.view(batch_size, sequence_length, 1)
         unmasked_tokens = n_lang_tokens + n_state_tokens + n_patch_tokens + n_obs_tokens
+        if self.use_2d_traj:
+            unmasked_tokens += n_patch_2d_tokens
         if self.use_hand_rgb:
             unmasked_tokens += n_hand_obs_tokens
             unmasked_tokens += n_hand_patch_tokens
-        if self.use_2d_traj:
-            unmasked_tokens += 30
         stacked_attention_mask = stacked_attention_mask.repeat(
                 1, 1, unmasked_tokens)
         
@@ -347,7 +387,7 @@ class GR1(nn.Module):
             mask_tokens = mask_token.repeat(batch_size, sequence_length, (self.image_size//self.patch_size)**2, 1)  # (b, l, n_patches, h)
             mask_tokens = mask_tokens + self.decoder_pos_embed.unsqueeze(0).repeat(batch_size, sequence_length, 1, 1)  # (b, l, n_patches, h)
 
-            obs_pred = self.decoder_embed(x[:, :, obs_query_token_start_i:(obs_query_token_start_i + self.n_patch_latents + n_obs_tokens)])  # (b, l, n_patch_latents + 1, h)
+            obs_pred = self.decoder_embed(x[:, :, obs_query_token_start_i:(obs_query_token_start_i + n_patch_tokens + n_obs_tokens)])  # (b, l, n_patch_latents + 1, h)
             obs_pred_ = torch.cat([obs_pred, mask_tokens], dim=2)  # (b, l, n_patches + n_patch_latens + 1, h)
             obs_pred_ = obs_pred_.reshape(-1, obs_pred_.shape[-2], obs_pred_.shape[-1])  # (b * l, n_patches + n_patch_latens + 1, h)
             for blk in self.decoder_blocks:
@@ -355,10 +395,10 @@ class GR1(nn.Module):
             obs_pred_ = self.decoder_norm(obs_pred_)
             obs_preds = self.decoder_pred(obs_pred_)  # (b * l, n_patches + n_patch_latens + 1, h)
             obs_preds = obs_preds.reshape(batch_size, sequence_length, -1, obs_preds.shape[-1])  # (b, l, n_patches + n_patch_latens + 1, h)
-            obs_preds = obs_preds[:, :, (self.n_patch_latents+n_obs_tokens):]  # (b, l, n_patches, h)
+            obs_preds = obs_preds[:, :, (n_patch_tokens+n_obs_tokens):]  # (b, l, n_patches, h)
 
             if self.fwd_pred_hand:
-                obs_pred_hand = self.decoder_embed(x[:, :, obs_hand_query_token_start_i:(obs_hand_query_token_start_i + self.n_patch_latents + n_obs_tokens)])
+                obs_pred_hand = self.decoder_embed(x[:, :, obs_hand_query_token_start_i:(obs_hand_query_token_start_i + n_patch_tokens + n_obs_tokens)])
                 obs_pred_hand_ = torch.cat([obs_pred_hand, mask_tokens], dim=2)
                 obs_pred_hand_ = obs_pred_hand_.reshape(-1, obs_pred_hand_.shape[-2], obs_pred_hand_.shape[-1])
                 for blk in self.decoder_blocks:
@@ -366,7 +406,7 @@ class GR1(nn.Module):
                 obs_pred_hand_ = self.decoder_norm(obs_pred_hand_)
                 obs_hand_preds = self.decoder_pred(obs_pred_hand_)
                 obs_hand_preds = obs_hand_preds.reshape(batch_size, sequence_length, -1, obs_hand_preds.shape[-1])
-                obs_hand_preds = obs_hand_preds[:, :, (self.n_patch_latents+n_obs_tokens):]
+                obs_hand_preds = obs_hand_preds[:, :, (n_patch_tokens+n_obs_tokens):]
         
         prediction = {
             'obs_preds': obs_preds,

@@ -162,6 +162,9 @@ def save_to_lmdb(output_dir, input_dir):
                 ds_2d_traj = worldtopixel_point(ds_traj)
                 traj_2d_tensor = torch.tensor(ds_2d_traj)
                 txn.put(f'traj_2d_{cur_step}'.encode(), pickle.dumps(traj_2d_tensor))
+                if i == start:
+                    # 起始点
+                    txn.put(f'traj_2d_init_{cur_episode}'.encode(), pickle.dumps(traj_2d_tensor))
 
                 # visualization 轨迹
                 # rgb_static_rgb = cv2.cvtColor(rgb_static.permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
