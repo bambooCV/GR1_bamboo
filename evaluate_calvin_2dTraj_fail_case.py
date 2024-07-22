@@ -83,8 +83,8 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
     val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
     eval_dir = get_log_dir(eval_dir)
     if json_loaded:
-        eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
-        # eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_1000.json")
+        # eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
+        eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_1000.json")
     else:
         eval_sequences = get_sequences(num_sequences)
     num_seq_per_procs = num_sequences // num_procs
@@ -115,6 +115,10 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
                 )
             else:
                 sequence_i += 1
+        path_parts = eval_result_path.rsplit('.', 1)
+        base_path = path_parts[0]
+        extension = path_parts[1]
+        eval_result_path = f"{base_path}_{procs_id}.{extension}"
         print_and_save_json(results, eval_sequences, eval_result_path, None)
     else:
         for initial_state, eval_sequence in eval_sequences:
@@ -310,8 +314,8 @@ def main():
     avg_reward = torch.tensor(evaluate_policy(
         eva, 
         env,
-        cfg['save_path']+'success_rate.txt', 
-        cfg['save_path']+'result.txt', 
+        cfg['save_path']+'success_rate_e{}.txt'.format(cfg['load_epoch']), 
+        cfg['save_path']+'result_e{}.txt'.format(cfg['load_epoch']), 
         cfg['ep_len'],
         cfg['num_sequences'],
         acc.num_processes,
