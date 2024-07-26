@@ -11,6 +11,11 @@ from torchvision.io import decode_jpeg
 from torch.utils.data import DataLoader
 ORIGINAL_STATIC_RES = 200
 ORIGINAL_GRIPPER_RES = 84
+def contains_all_words(inst, words):
+    for word in words:
+        if word not in inst:
+            return False
+    return True
 def resample_sequence(sequence, target_length):
     """
     使用插值将 sequence 重新采样到 target_length，并将结果四舍五入为整数
@@ -123,17 +128,21 @@ class LMDBDataset(Dataset):
                 
                 # 可视化 action ori 和 downsample的
                 # visualization 轨迹
-                # import cv2
-                # rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
-                # for point_2d in future_2d_actions[:,:2]:
-                #     cv2.circle(rgb_static_rgb, tuple(point_2d.tolist()), radius=3, color=(0, 255, 255), thickness=-1)
-                # for point_2d in actions[i,:,:]:
-                #     cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                # # 把inst的文字放在图片左下角 放在左下角！
-                
-                # cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                # cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
-                # cv2.waitKey(0)
+                # words_to_check = ["push", "pink", "block", "right"]
+
+                # if contains_all_words(inst, words_to_check):
+                # # if "lightbulb" in inst or "light bulb" in inst:
+                #     import cv2
+                #     rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
+                #     for point_2d in future_2d_actions[:,:2]:
+                #         cv2.circle(rgb_static_rgb, tuple(point_2d.tolist()), radius=3, color=(0, 255, 255), thickness=-1)
+                #     for point_2d in actions[i,:,:]:
+                #         cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                #     # 把inst的文字放在图片左下角 放在左下角！
+                    
+                #     cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                #     cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
+                    # cv2.waitKey(0)
 
 
         return {
@@ -150,12 +159,15 @@ class LMDBDataset(Dataset):
 
     def __len__(self):
         return self.end_step - self.start_step
+
 if __name__ == '__main__':
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 8
+    batch_size = 1
     num_workers = 1
     train_dataset = LMDBDataset(
-        lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb", 
+        # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb", 
+        lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb/",
         sequence_length = 1, 
         chunk_size = 30,# 最长不超过65
         action_dim = 2, # x,y,gripper_state
@@ -163,18 +175,19 @@ if __name__ == '__main__':
         end_ratio = 0.9, 
     )
     val_dataset = LMDBDataset(
-        lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb", 
+        # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb", 
+        lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb/",
         sequence_length = 1, 
         chunk_size = 30,# 最长不超过65
         action_dim = 2,
-        start_ratio = 0,
-        end_ratio = 0.9, 
+        start_ratio = 0.95,
+        end_ratio = 1, 
     )
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, # to be flattened in prefetcher  
         num_workers=num_workers,
-        pin_memory=True, # Accelerate data reading
+        pin_memory=True, # Accelerate data reading  
         shuffle=True,
         prefetch_factor=2,
         persistent_workers=True,
@@ -184,16 +197,16 @@ if __name__ == '__main__':
         batch_size=batch_size, # to be flattened in prefetcher  
         num_workers=num_workers,
         pin_memory=True, # Accelerate data reading
-        shuffle=True,
+        shuffle=False,
         prefetch_factor=2,
         persistent_workers=True,
     ) 
     train_prefetcher = DataPrefetcher(train_loader, device)
     test_prefetcher = DataPrefetcher(val_loader, device)
     for epoch in range(10):
-        batch, load_time = train_prefetcher.next()
+        batch, load_time = test_prefetcher.next()
         while batch is not None:
             
-            print(batch)
-            batch, load_time = train_prefetcher.next()
+            # print(batch)
+            batch, load_time = test_prefetcher.next()
         

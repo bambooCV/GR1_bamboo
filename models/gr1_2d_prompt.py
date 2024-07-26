@@ -140,7 +140,7 @@ class GR1(nn.Module):
 
         
         # Observation query token
-        self.obs_queries = nn.Embedding(self.n_patch_latents + 1, self.hidden_size)
+        self.obs_queries = nn.Embedding(self.n_patch_latents*2 + 1, self.hidden_size)
         self.obs_hand_queries = nn.Embedding(self.n_patch_latents + 1, self.hidden_size)
 
         # Action prediction
@@ -302,8 +302,8 @@ class GR1(nn.Module):
             action_chunk_queries = action_chunk_queries.view(1, 1, self.chunk_size, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, chunk_size, h)
             stacked_inputs = torch.cat((stacked_inputs, action_chunk_queries), dim=2)  # (b, t, n_tokens, h)
         if self.fwd_pred:
-            obs_queries = self.obs_queries.weight  # (n_patch_latents + 1, h)
-            obs_queries = obs_queries.view(1, 1, self.n_patch_latents + 1, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, n_patch_latents + 1, h)
+            obs_queries = self.obs_queries.weight  # (n_patch_latents*2 + 1, h)
+            obs_queries = obs_queries.view(1, 1, self.n_patch_latents*2 + 1, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, n_patch_latents + 1, h)
             stacked_inputs = torch.cat((stacked_inputs, obs_queries), dim=2)
             if self.fwd_pred_hand:
                 obs_hand_queries = self.obs_hand_queries.weight # 10, h
@@ -332,7 +332,7 @@ class GR1(nn.Module):
             n_tokens += self.chunk_size
         if self.fwd_pred:
             obs_query_token_start_i = n_tokens
-            n_tokens += (n_patch_tokens + n_obs_tokens)
+            n_tokens += (n_patch_tokens*2 + n_obs_tokens)
             if self.fwd_pred_hand:
                 obs_hand_query_token_start_i = n_tokens
                 n_tokens += (n_patch_tokens + n_obs_tokens) 
@@ -358,7 +358,7 @@ class GR1(nn.Module):
             act_query_attention_mask = torch.zeros((batch_size, sequence_length, n_act_pred_tokens), dtype=torch.long, device=stacked_inputs.device)
             stacked_attention_mask = torch.cat((stacked_attention_mask, act_query_attention_mask), dim=2)
         if self.fwd_pred:
-            obs_query_attention_mask = torch.zeros((batch_size, sequence_length, n_patch_tokens + n_obs_tokens), dtype=torch.long, device=stacked_inputs.device)
+            obs_query_attention_mask = torch.zeros((batch_size, sequence_length, n_patch_tokens*2 + n_obs_tokens), dtype=torch.long, device=stacked_inputs.device)
             stacked_attention_mask = torch.cat((stacked_attention_mask, obs_query_attention_mask), dim=2)
             if self.fwd_pred_hand:
                 obs_hand_query_attention_mask = torch.zeros((batch_size, sequence_length, n_patch_tokens + n_obs_tokens), dtype=torch.long, device=stacked_inputs.device)
@@ -388,7 +388,7 @@ class GR1(nn.Module):
             mask_tokens = mask_token.repeat(batch_size, sequence_length, (self.image_size//self.patch_size)**2, 1)  # (b, l, n_patches, h)
             mask_tokens = mask_tokens + self.decoder_pos_embed.unsqueeze(0).repeat(batch_size, sequence_length, 1, 1)  # (b, l, n_patches, h)
 
-            obs_pred = self.decoder_embed(x[:, :, obs_query_token_start_i:(obs_query_token_start_i + n_patch_tokens + n_obs_tokens)])  # (b, l, n_patch_latents + 1, h)
+            obs_pred = self.decoder_embed(x[:, :, obs_query_token_start_i:(obs_query_token_start_i + n_patch_tokens*2 + n_obs_tokens)])  # (b, l, n_patch_latents + 1, h)
             obs_pred_ = torch.cat([obs_pred, mask_tokens], dim=2)  # (b, l, n_patches + n_patch_latens + 1, h)
             obs_pred_ = obs_pred_.reshape(-1, obs_pred_.shape[-2], obs_pred_.shape[-1])  # (b * l, n_patches + n_patch_latens + 1, h)
             for blk in self.decoder_blocks:
@@ -396,7 +396,7 @@ class GR1(nn.Module):
             obs_pred_ = self.decoder_norm(obs_pred_)
             obs_preds = self.decoder_pred(obs_pred_)  # (b * l, n_patches + n_patch_latens + 1, h)
             obs_preds = obs_preds.reshape(batch_size, sequence_length, -1, obs_preds.shape[-1])  # (b, l, n_patches + n_patch_latens + 1, h)
-            obs_preds = obs_preds[:, :, (n_patch_tokens+n_obs_tokens):]  # (b, l, n_patches, h)
+            obs_preds = obs_preds[:, :, (n_patch_tokens*2+n_obs_tokens):]  # (b, l, n_patches, h)
 
             if self.fwd_pred_hand:
                 obs_pred_hand = self.decoder_embed(x[:, :, obs_hand_query_token_start_i:(obs_hand_query_token_start_i + n_patch_tokens + n_obs_tokens)])

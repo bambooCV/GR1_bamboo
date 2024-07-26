@@ -1,5 +1,9 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7,8,9'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import math
 import json
 from time import time
@@ -16,13 +20,13 @@ from torch.utils.tensorboard import SummaryWriter
 import clip
 from LMDBDataset_jpeg import LMDBDataset as LMDBdst_jpeg
 from LMDBDataset_jpeg import DataPrefetcher as DataPrefetcher_jpeg
-from traj_predict.traj_func import PreProcess,transform_points,normalize_data
+from traj_predict.traj_func import PreProcess
 import models.vision_transformer as vits
-from models.gr1_2d import GR1 
+from models.gr1_2d_prompt import GR1 
 from tqdm import tqdm
 from AccelerateFix import AsyncStep
 # fsc
-def masked_loss(pred, target, mask, skip_frame=0, loss_func=F.mse_loss):
+def masked_loss(pred, target, mask, skip_frame=0, loss_func=F.mse_loss,masked_patch=None,):
     if skip_frame == 0:
         new_pred = pred
     else:
@@ -33,7 +37,12 @@ def masked_loss(pred, target, mask, skip_frame=0, loss_func=F.mse_loss):
     loss = loss_func(new_pred, new_target, reduction='none')
     for _ in range(len(data_shape) - len(mask_shape)):
         new_mask = new_mask.unsqueeze(-1)
-    loss = (loss*new_mask).sum() / new_mask.sum() / math.prod(data_shape[len(mask_shape):])
+    if masked_patch is not None:
+        new_masked_patch = masked_patch[:, skip_frame:].unsqueeze(-1) # b,s,196,1
+        total_masked = new_masked_patch * new_mask
+        loss = (loss*total_masked).sum() / total_masked.sum() / data_shape[-1]
+    else:
+        loss = (loss*new_mask).sum() / new_mask.sum() / math.prod(data_shape[len(mask_shape):])
     return loss
 
 def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva, eval_dir, optimizer, scheduler, device, cfg, step, writer):
@@ -91,12 +100,15 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                 avg_reward = acc.gather_for_metrics(avg_reward).mean()
 
         log_loss = {
+            'rgb_static_selected_patches':0,
             'rgb_static': 0,
             'rgb_gripper': 0,
             'action_arm': 0,
             'action_gripper': 0,
+            'total_loss': 0,
         }
         eval_log_loss = {
+            'rgb_static_selected_patches':0,
             'rgb_static': 0,
             'rgb_gripper': 0,
             'action_arm': 0,
@@ -116,22 +128,38 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                 with acc.accumulate(model):
                     model.train()
                     optimizer.zero_grad()
-                    rgb_static_norm,rgb_gripper_norm,actions_2d_transformed_norm = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions_2d'],train=True)     
+                    rgb_static_norm,rgb_gripper_norm,actions_2d_transformed = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions_2d'],train=True)     
                     obs_mask = batch['mask'][..., 0]
                     pred = model(
                         rgb=rgb_static_norm,
                         hand_rgb=rgb_gripper_norm,
                         state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
                         language=batch['inst_token'],
-                        action_2d = actions_2d_transformed_norm,
+                        action_2d = actions_2d_transformed,
                         attention_mask=obs_mask,
                     )
+                    # 找索引块 作为监督信号，让模型更关注索引块的图像变化
+                    action_2d = torch.round(actions_2d_transformed).int()
+                    action_2d = torch.clamp(action_2d, min=0, max=223)
+                    num_patches_per_row = 224 // 16
+                    patch_row = action_2d[...,1] // 16
+                    patch_col = action_2d[...,0] // 16
+                    patch_index = patch_row * num_patches_per_row + patch_col
+                    masked_patch = torch.zeros((pred['obs_preds'].shape[0],pred['obs_preds'].shape[1],pred['obs_preds'].shape[2])).to(device)
+                    for patch_index_i in range(patch_index.size(0)):
+                        for patch_index_j in range(patch_index.size(1)):
+                            # 获取当前序列中的索引
+                            indices = patch_index[patch_index_i, patch_index_j]
+                            # 将 masked_patch 中对应位置设为 1
+                            masked_patch[patch_index_i, patch_index_j, indices] = 1
                     loss = {}
+                    loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,masked_patch)
                     loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                     loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                     loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
                     loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
-                    total_loss = loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] 
+                    total_loss = loss['rgb_static_selected_patches'] + loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] 
+                    loss['total_loss'] = total_loss
                     acc.backward(total_loss)
                     optimizer.step(optimizer)
                     for key in log_loss:
@@ -152,7 +180,21 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                             action_2d = actions_2d_transformed_norm,
                             attention_mask=obs_mask,
                         )
+                        action_2d = torch.round(actions_2d_transformed).int()
+                        action_2d = torch.clamp(action_2d, min=0, max=223)
+                        num_patches_per_row = 224 // 16
+                        patch_row = action_2d[...,1] // 16
+                        patch_col = action_2d[...,0] // 16
+                        patch_index = patch_row * num_patches_per_row + patch_col
+                        masked_patch = torch.zeros((pred['obs_preds'].shape[0],pred['obs_preds'].shape[1],pred['obs_preds'].shape[2])).to(device)
+                        for patch_index_i in range(patch_index.size(0)):
+                            for patch_index_j in range(patch_index.size(1)):
+                                # 获取当前序列中的索引
+                                indices = patch_index[patch_index_i, patch_index_j]
+                                # 将 masked_patch 中对应位置设为 1
+                                masked_patch[patch_index_i, patch_index_j, indices] = 1
                         loss = {}
+                        loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,masked_patch)                       
                         loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                         loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                         loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
@@ -171,7 +213,7 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                     fps = acc.gather_for_metrics(torch.tensor(fps).to(device)).sum()
 
                     text = 'Train Epoch: {} [{}/{} ({:.0f}%)] Reward: {:.5f} FPS:{:.5f} Load Pertentage:{:.5f} LR:{}'.format(
-                        epoch, 
+                        epoch+1, 
                         batch_idx * cfg['bs_per_gpu'] * acc.num_processes, 
                         train_dataset_len, 
                         100. * batch_idx * cfg['bs_per_gpu'] * acc.num_processes / train_dataset_len, 
@@ -208,7 +250,7 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                 
                 pbar.set_postfix(
                     ordered_dict={
-                        "epoch": epoch,
+                        "epoch": epoch+1,
                         "total loss": total_loss.item(),
                         "lr": scheduler.get_last_lr()[0],
                     }
@@ -225,12 +267,13 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('configs_test.json'))
+    cfg = json.load(open('configs_2dTraj_118.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     acc = Accelerator(
         gradient_accumulation_steps=cfg['gradient_accumulation_steps'],
+        mixed_precision="bf16",
         kwargs_handlers=[init_pg_kwargs, ddp_kwargs]
     )
     device = acc.device
@@ -265,7 +308,7 @@ if __name__ == '__main__':
         batch_size=cfg['bs_per_gpu'], # to be flattened in prefetcher  
         num_workers=cfg['workers_per_gpu'],
         pin_memory=True, # Accelerate data reading
-        shuffle=False,
+        shuffle=True,
         prefetch_factor=cfg['prefetch_factor'],
         persistent_workers=True,
     ) 
@@ -274,7 +317,7 @@ if __name__ == '__main__':
         batch_size=cfg['bs_per_gpu'], # to be flattened in prefetcher  
         num_workers=cfg['workers_per_gpu'],
         pin_memory=True, # Accelerate data reading
-        shuffle=False,
+        shuffle=True,
         prefetch_factor=cfg['prefetch_factor'],
         persistent_workers=True,
     ) 
@@ -303,7 +346,7 @@ if __name__ == '__main__':
         },
         without_norm_pixel_loss=False,
         use_hand_rgb=True,
-        use_2d_traj=False,
+        use_2d_traj=True,
         n_layer=cfg['n_layer'],
         n_head=cfg['n_head'],
         n_inner=4*cfg['embed_dim'],
@@ -313,7 +356,17 @@ if __name__ == '__main__':
         attn_pdrop=cfg['dropout'],
     ).to(device)  # for fused optimizer
     if cfg['load_bytedance_ckpt']:
-        missing_keys, unexpected_keys = model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'])['state_dict'], strict=False)
+        pretrained_dict = torch.load(cfg['bytedance_ckpt_path'])['state_dict']
+        obs_queries_weight = pretrained_dict['obs_queries.weight']
+        current_obs_queries_weight = model.state_dict()['obs_queries.weight']
+        if current_obs_queries_weight.shape != obs_queries_weight.shape:
+            new_obs_queries_weight = torch.zeros_like(current_obs_queries_weight)
+            new_obs_queries_weight[:9, :obs_queries_weight.shape[1]] = obs_queries_weight[:9]
+            new_obs_queries_weight[9:18, :] = obs_queries_weight[:9]
+            new_obs_queries_weight[18:,:] =  obs_queries_weight[9:10]
+            pretrained_dict['obs_queries.weight'] = new_obs_queries_weight
+        missing_keys, unexpected_keys = model.load_state_dict(pretrained_dict, strict=False)
+        
         acc.print('load ', cfg['bytedance_ckpt_path'], '\nmissing ', missing_keys, '\nunexpected ', unexpected_keys)
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
         state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 
@@ -333,6 +386,10 @@ if __name__ == '__main__':
         num_warmup_steps=cfg['num_warmup_epochs']*total_prints_per_epoch,
         num_training_steps=cfg['num_epochs']*total_prints_per_epoch,
     )
+    # 手动调整调度器状态
+    if step > 0:
+        for _ in range(step):
+            scheduler.step()
     model, optimizer, train_loader, test_loader = acc.prepare(
         model, 
         optimizer, 

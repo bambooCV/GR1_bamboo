@@ -1,7 +1,9 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7,8,9'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+#os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import math
 import json
 from time import time
@@ -265,7 +267,7 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('configs_2dTraj_test.json'))
+    cfg = json.load(open('configs_2dTraj_3090.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -354,7 +356,17 @@ if __name__ == '__main__':
         attn_pdrop=cfg['dropout'],
     ).to(device)  # for fused optimizer
     if cfg['load_bytedance_ckpt']:
-        missing_keys, unexpected_keys = model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'])['state_dict'], strict=False)
+        pretrained_dict = torch.load(cfg['bytedance_ckpt_path'])['state_dict']
+        obs_queries_weight = pretrained_dict['obs_queries.weight']
+        current_obs_queries_weight = model.state_dict()['obs_queries.weight']
+        if current_obs_queries_weight.shape != obs_queries_weight.shape:
+            new_obs_queries_weight = torch.zeros_like(current_obs_queries_weight)
+            new_obs_queries_weight[:9, :obs_queries_weight.shape[1]] = obs_queries_weight[:9]
+            new_obs_queries_weight[9:18, :] = obs_queries_weight[:9]
+            new_obs_queries_weight[18:,:] =  obs_queries_weight[9:10]
+            pretrained_dict['obs_queries.weight'] = new_obs_queries_weight
+        missing_keys, unexpected_keys = model.load_state_dict(pretrained_dict, strict=False)
+        
         acc.print('load ', cfg['bytedance_ckpt_path'], '\nmissing ', missing_keys, '\nunexpected ', unexpected_keys)
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
         state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 

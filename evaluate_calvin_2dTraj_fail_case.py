@@ -26,8 +26,10 @@ import argparse
 import json
 import logging
 import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from pathlib import Path
 import sys
 import time
@@ -60,7 +62,7 @@ from evaluation.calvin_evaluation_traj import GR1CalvinEvaluation
 from utils.calvin_utils import print_and_save,print_and_save_json
 import clip
 from PreProcess import PreProcess
-import models.vision_transformer as vits
+import models.vision_transformer as vits 
 from models.gr1_2d import GR1 
 import cv2
 logger = logging.getLogger(__name__)
@@ -83,8 +85,11 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
     val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
     eval_dir = get_log_dir(eval_dir)
     if json_loaded:
+        if debug == True:
+            eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
+        else:
+            eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_1000.json")
         # eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
-        eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_1000.json")
     else:
         eval_sequences = get_sequences(num_sequences)
     num_seq_per_procs = num_sequences // num_procs
@@ -177,6 +182,10 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         if success:
             success_counter += 1
         else:
+            if debug: #继续下一个子任务 不跳出
+                success_counter +=0
+            else:
+                return success_counter
             return success_counter
     return success_counter
 
@@ -194,7 +203,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
     unfinished = 0
     for step in range(ep_len):
         if unfinished == 0:
-            action,re_out_action = model.step(obs, lang_annotation)
+            action,re_out_action = model.step(obs, lang_annotation,step,debug)
             unfinished = action.shape[0]
         obs, _, _, current_info = env.step(action[-unfinished])
         unfinished -= 1
