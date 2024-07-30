@@ -77,10 +77,11 @@ class GR1CalvinEvaluation(CalvinBaseModel):
 
     def step(self, obs, goal,step = 0,debug=False):
         """Step function."""
-        if debug:
-            step = step
-        else:
-            step = 0
+        # if debug:
+        #     step = step
+        # else:
+        #     step = 0
+        step = step
         # Language
         text = goal
         tokenized_text = self.tokenizer(text)
@@ -148,7 +149,9 @@ class GR1CalvinEvaluation(CalvinBaseModel):
 
         # 从diffusion policy获取当前的action 2d         
         # 2d_traj_pred #only do one time for each episode
-        if len(self.traj_2d_list) == 0 or step == 200:
+        # if len(self.traj_2d_list) == 0 or step == 200:
+        if len(self.traj_2d_list) == 0 or step%200 == 0:
+        # if True:
             with torch.no_grad():
                 self.noise_scheduler.set_timesteps(self.num_diffusion_iters)
                 rgb_static_norm = rgb_data[:,len(self.rgb_list)-1].unsqueeze(0)
@@ -169,7 +172,8 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 
                 re_out_action = unnormalize_data(out_action)
                 self.traj_2d_list.append(re_out_action.squeeze(0))
-            if step == 200: # 200帧还没有完成任务，则重新给一个diffusion结果
+            # if step == 200: # 200帧还没有完成任务，则重新给一个diffusion结果
+            if  step%200 == 0:
                 for _ in range(buffer_len):
                     self.traj_2d_list.pop(0)
                     self.traj_2d_list.append(re_out_action.squeeze(0))
@@ -217,20 +221,44 @@ class GR1CalvinEvaluation(CalvinBaseModel):
             patch_row = action_2d[...,1] // 16
             patch_col = action_2d[...,0] // 16
             patch_index = patch_row * num_patches_per_row + patch_col
+            
+            
+            
+            action_2d = torch.round(traj_2d).int()
+            action_2d = torch.clamp(action_2d, min=0, max=223)
+            num_patches_per_row = 224 // 16
+            patch_row = action_2d[...,1] // 16
+            patch_col = action_2d[...,0] // 16
+            patch_index = patch_row * num_patches_per_row + patch_col
+            masked_patch = torch.zeros((prediction["obs_targets"].shape[0],prediction["obs_targets"].shape[1],prediction["obs_targets"].shape[2])).to(self.device)
+            for patch_index_i in range(patch_index.size(0)):
+                for patch_index_j in range(patch_index.size(1)):
+                    # 获取当前序列中的索引
+                    indices = patch_index[patch_index_i, patch_index_j]
+                    # 将 masked_patch 中对应位置设为 1
+                    masked_patch[patch_index_i, patch_index_j, indices] = 1 
+            masked_patch = masked_patch.unsqueeze(-1)
+            
 
-            patch_image = torch.zeros(prediction["obs_targets"].shape).to(self.device)
-            patch_index_expanded = patch_index.unsqueeze(0).unsqueeze(1).expand(patch_image.shape[0], patch_image.shape[1], -1)
-            patch_image.scatter_(2, patch_index_expanded.long().unsqueeze(-1).expand(-1, -1, -1, patch_image.shape[-1]), 255)
+            patch_image = masked_patch*prediction["obs_targets"]
+            patch_image = patch_image * std + mean
             #reshape 196 to 224*224
             patch_image = patch_image.reshape(rgb_vis.shape[0], rgb_vis.shape[1], h_p, w_p, p, p, 3)
             patch_image = patch_image.permute(0, 1, 6, 2, 4, 3, 5)
             patch_image = patch_image.reshape(rgb_vis.shape[0], rgb_vis.shape[1], 3, h_p * p, w_p * p)
-
+            patch_image = self.preprocessor.rgb_recovery(patch_image)
+            
+            patch_image_preds = masked_patch*prediction["obs_preds"]
+            patch_image_preds = patch_image_preds * std + mean
+            #reshape 196 to 224*224
+            patch_image_preds = patch_image_preds.reshape(rgb_vis.shape[0], rgb_vis.shape[1], h_p, w_p, p, p, 3)
+            patch_image_preds = patch_image_preds.permute(0, 1, 6, 2, 4, 3, 5)
+            patch_image_preds = patch_image_preds.reshape(rgb_vis.shape[0], rgb_vis.shape[1], 3, h_p * p, w_p * p)
+            patch_image_preds = self.preprocessor.rgb_recovery(patch_image_preds)
             
             obs_targets = prediction["obs_targets"]
             obs_targets = obs_targets * std + mean
             obs_targets = obs_targets.reshape(rgb_vis.shape[0], rgb_vis.shape[1], h_p, w_p, p, p, 3)
-            # 调整维度以匹配原始图像格式
             obs_targets = obs_targets.permute(0, 1, 6, 2, 4, 3, 5)
             obs_targets = obs_targets.reshape(rgb_vis.shape[0], rgb_vis.shape[1], 3, h_p * p, w_p * p)
             obs_targets = self.preprocessor.rgb_recovery(obs_targets)
@@ -239,7 +267,6 @@ class GR1CalvinEvaluation(CalvinBaseModel):
             obs_preds = prediction["obs_preds"]
             obs_preds = obs_preds * std + mean
             obs_preds = obs_preds.reshape(rgb_vis.shape[0], rgb_vis.shape[1], h_p, w_p, p, p, 3)
-            # 调整维度以匹配原始图像格式
             obs_preds = obs_preds.permute(0, 1, 6, 2, 4, 3, 5)
             obs_preds = obs_preds.reshape(rgb_vis.shape[0], rgb_vis.shape[1], 3, h_p * p, w_p * p)
             obs_preds = self.preprocessor.rgb_recovery(obs_preds)
@@ -250,11 +277,13 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 seq_idx = len(self.rgb_list)-1
                 rgb_static_ori = cv2.cvtColor(obs_targets[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
                 rgb_static_pred = cv2.cvtColor(obs_preds[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                rgb_static_attention = cv2.cvtColor(patch_image[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                cv2.imshow('original RGB Static Image', rgb_static_ori)  # 注意这里需要调整回 HWC 格式
-                cv2.imshow('predicted RGB Static Image', rgb_static_pred)  # 注意这里需要调整回 HWC 格式
-                cv2.imshow('attention RGB Static Image', rgb_static_attention)  # 注意这里需要调整回 HWC 格式
-                cv2.waitKey(0)
+                rgb_static_patch_image = cv2.cvtColor(patch_image[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                rgb_static_patch_image_preds = cv2.cvtColor(patch_image_preds[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                cv2.imshow('Original RGB Static Image', rgb_static_ori)  # 注意这里需要调整回 HWC 格式
+                cv2.imshow('Predicted RGB Static Image', rgb_static_pred)  # 注意这里需要调整回 HWC 格式
+                cv2.imshow('Patched RGB Static Image', rgb_static_patch_image)  # 注意这里需要调整回 HWC 格式
+                cv2.imshow('Patched_Pred RGB Static Image', rgb_static_patch_image_preds)  # 注意这里需要调整回 HWC 格式
+                # cv2.waitKey(0)
 
         
         # Arm action

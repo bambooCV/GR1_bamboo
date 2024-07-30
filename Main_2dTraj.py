@@ -1,9 +1,9 @@
 import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
-#os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import math
 import json
 from time import time
@@ -101,6 +101,7 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
         log_loss = {
             'rgb_static_selected_patches':0,
+            'traj_2d_preds':0,
             'rgb_static': 0,
             'rgb_gripper': 0,
             'action_arm': 0,
@@ -109,6 +110,7 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
         }
         eval_log_loss = {
             'rgb_static_selected_patches':0,
+            'traj_2d_preds':0,
             'rgb_static': 0,
             'rgb_gripper': 0,
             'action_arm': 0,
@@ -135,30 +137,22 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                         hand_rgb=rgb_gripper_norm,
                         state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
                         language=batch['inst_token'],
-                        action_2d = actions_2d_transformed,
+                        action_2d = actions_2d_transformed,# 224*224的坐标系
                         attention_mask=obs_mask,
                     )
-                    # 找索引块 作为监督信号，让模型更关注索引块的图像变化
-                    action_2d = torch.round(actions_2d_transformed).int()
-                    action_2d = torch.clamp(action_2d, min=0, max=223)
-                    num_patches_per_row = 224 // 16
-                    patch_row = action_2d[...,1] // 16
-                    patch_col = action_2d[...,0] // 16
-                    patch_index = patch_row * num_patches_per_row + patch_col
-                    masked_patch = torch.zeros((pred['obs_preds'].shape[0],pred['obs_preds'].shape[1],pred['obs_preds'].shape[2])).to(device)
-                    for patch_index_i in range(patch_index.size(0)):
-                        for patch_index_j in range(patch_index.size(1)):
-                            # 获取当前序列中的索引
-                            indices = patch_index[patch_index_i, patch_index_j]
-                            # 将 masked_patch 中对应位置设为 1
-                            masked_patch[patch_index_i, patch_index_j, indices] = 1
                     loss = {}
-                    loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,masked_patch)
+                    # new loss
+                    
+                    loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
+                    loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
+                    
+                    # old loss
                     loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                     loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                     loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
                     loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
-                    total_loss = loss['rgb_static_selected_patches'] + loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] 
+                    total_loss = loss['rgb_static_selected_patches'] + cfg['arm_loss_ratio']*loss['traj_2d_preds'] \
+                                + loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] 
                     loss['total_loss'] = total_loss
                     acc.backward(total_loss)
                     optimizer.step(optimizer)
@@ -180,21 +174,13 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                             action_2d = actions_2d_transformed_norm,
                             attention_mask=obs_mask,
                         )
-                        action_2d = torch.round(actions_2d_transformed).int()
-                        action_2d = torch.clamp(action_2d, min=0, max=223)
-                        num_patches_per_row = 224 // 16
-                        patch_row = action_2d[...,1] // 16
-                        patch_col = action_2d[...,0] // 16
-                        patch_index = patch_row * num_patches_per_row + patch_col
-                        masked_patch = torch.zeros((pred['obs_preds'].shape[0],pred['obs_preds'].shape[1],pred['obs_preds'].shape[2])).to(device)
-                        for patch_index_i in range(patch_index.size(0)):
-                            for patch_index_j in range(patch_index.size(1)):
-                                # 获取当前序列中的索引
-                                indices = patch_index[patch_index_i, patch_index_j]
-                                # 将 masked_patch 中对应位置设为 1
-                                masked_patch[patch_index_i, patch_index_j, indices] = 1
+                        
                         loss = {}
-                        loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,masked_patch)                       
+                        # new loss
+                        loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
+                        loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
+                    
+                        # old loss
                         loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                         loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                         loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)

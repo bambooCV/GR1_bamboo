@@ -82,6 +82,7 @@ class LMDBDataset(Dataset):
         self.dummy_gripper_state =  torch.zeros(sequence_length, 2)
         self.dummy_actions = torch.zeros(sequence_length, chunk_size, action_dim)
         self.dummy_actions_2d = torch.zeros(sequence_length,30, 2)
+        self.dummy_traj_2d_preds = torch.zeros(sequence_length,100, 2) # 最多100个2d点
         self.dummy_mask = torch.zeros(sequence_length, chunk_size)
         self.lmdb_dir = lmdb_dir
         env = lmdb.open(lmdb_dir, readonly=True, create=False, lock=False)
@@ -108,6 +109,7 @@ class LMDBDataset(Dataset):
         actions = self.dummy_actions.clone()
         mask = self.dummy_mask.clone()
         actions_2d = self.dummy_actions_2d.clone()
+        traj_2d_preds =self.dummy_traj_2d_preds.clone()
 
         cur_episode = loads(self.txn.get(f'cur_episode_{idx}'.encode()))
         inst_token = loads(self.txn.get(f'inst_token_{cur_episode}'.encode()))
@@ -126,7 +128,9 @@ class LMDBDataset(Dataset):
                         elif self.action_mode == 'ee_abs_pose':
                             actions[i, j] = loads(self.txn.get(f'abs_action_{idx+i+j}'.encode()))
                         actions[i, j, -1] = (actions[i, j, -1] + 1) / 2
-                # future_2d_actions = loads(self.txn.get(f'traj_2d_{idx+i}'.encode()))
+                traj_2d_preds_len =len(loads(self.txn.get(f'traj_2d_{idx+i}'.encode()))[:,:2])
+                traj_2d_preds[i,:traj_2d_preds_len] = loads(self.txn.get(f'traj_2d_{idx+i}'.encode()))[:,:2]
+                traj_2d_preds[i,traj_2d_preds_len:] = traj_2d_preds[i,traj_2d_preds_len-1] # 补齐长度
                 future_2d_actions = loads(self.txn.get(f'traj_2d_init_{cur_episode}'.encode())) # 只用当前episode的2d action 为了和inference保持一致 且快速验证
                 actions_2d[i] = resample_sequence(future_2d_actions[:,:2], 30)
                 
@@ -139,6 +143,7 @@ class LMDBDataset(Dataset):
             'actions': actions,
             'mask': mask,
             'actions_2d': actions_2d,
+            'traj_2d_preds': traj_2d_preds,
         }
 
     def __len__(self):
@@ -147,7 +152,7 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     import json
      # Preparation
-    cfg = json.load(open('configs_test.json'))
+    cfg = json.load(open('configs_2dTraj_test.json'))
     preprocessor = PreProcess(
         cfg['rgb_static_pad'],
         cfg['rgb_gripper_pad'],

@@ -23,46 +23,6 @@ from transformers import GPT2Model
 from models.vision_transformer import Block
 from models.transformer_utils import get_2d_sincos_pos_embed
 
-class TokenLearnerAttention(nn.Module):
-    def __init__(self, input_dim, num_points, num_tokens, output_dim, num_heads=2):
-        super(TokenLearnerAttention, self).__init__()
-        self.num_tokens = num_tokens
-        self.input_dim = input_dim
-        # 位置编码
-        self.positional_encoding = nn.Parameter(torch.randn(num_points, input_dim))
-        # 可学习的token表示
-        self.token_embed = nn.Parameter(torch.randn(num_tokens, input_dim))
-        
-        # 多头注意力机制
-        self.self_attention = nn.MultiheadAttention(embed_dim=input_dim, num_heads=num_heads)
-        
-        # 最后的线性层，将输入维度转换为输出维度
-        self.linear = nn.Linear(input_dim, output_dim)
-        
-    
-    def forward(self, x):
-        batch_size = x.size(0)
-        seq_length = x.size(1)
-        num_points = x.size(2)
-        # 位置编码添加到点特征中
-        pos_encoding = self.positional_encoding.unsqueeze(1).repeat(1, batch_size * seq_length, 1)  # (seq_length, batch_size * seq_length, input_dim)
-
-        # 将x的维度调整为 (batch_size * seq_length, num_points, input_dim)
-        x_reshaped = x.view(batch_size * seq_length, num_points, self.input_dim).permute(1, 0, 2)  # (num_points, batch_size * seq_length, input_dim)
-        x_reshaped += pos_encoding  # 添加位置编码
-        # 重复token表示以适应批量大小和点的数量
-        tokens = self.token_embed.unsqueeze(1).repeat(1, batch_size * seq_length, 1)  # (num_tokens, batch_size * seq_length, input_dim)
-        
-        # 使用token表示进行注意力计算
-        attn_output, _ = self.self_attention(tokens, x_reshaped, x_reshaped)
-        
-        # 结果变换回(batch_size, num_points, num_tokens, input_dim)
-        attn_output = attn_output.permute(1, 0, 2).view(batch_size, seq_length, self.num_tokens, self.input_dim)
-        
-        # 将输出通过线性层转换为期望的输出维度
-        output = self.linear(attn_output)
-        
-        return output
 
 class GR1(nn.Module):
     def __init__(
@@ -146,9 +106,8 @@ class GR1(nn.Module):
         self.embed_gripper_state = torch.nn.Linear(2, hidden_size) # one-hot gripper state
         self.embed_state = torch.nn.Linear(2*hidden_size, hidden_size)
         if self.use_2d_traj:
-            self.traj_2d_tokens = 3
+            # self.embed_traj_2d = torch.nn.Linear(2, hidden_size)
             self.embed_traj_2d = nn.Embedding(224, hidden_size) # 224 是索引范围
-            self.traj_2d_resampler = TokenLearnerAttention(hidden_size*2, 30, self.traj_2d_tokens, hidden_size) # 3个learnable token 代表2的坐标
             
             self.n_patch_latents_2d = resampler_params['num_latents']
             self.perceiver_resampler_2d = PerceiverResampler(
@@ -190,9 +149,6 @@ class GR1(nn.Module):
             nn.Linear(hidden_size//2, hidden_size//2)])
         self.pred_arm_act = nn.Linear(hidden_size//2, self.act_dim-1) # arm action
         self.pred_gripper_act = nn.Linear(hidden_size//2, 1) # gripper action (binary)
-        # sub prediction 2d traj
-        self.pred_2d_points_num = 1
-        self.pred_2d_points = nn.Linear(hidden_size//2, 2*self.pred_2d_points_num) # 2d points action 
         
         # Forward prediction
         self.decoder_embed = nn.Linear(hidden_size, hidden_size, bias=True)
@@ -284,11 +240,10 @@ class GR1(nn.Module):
             selected_patch_embeddings = self.perceiver_resampler_2d(selected_patch_embeddings)  # (b * t, 1, n_patch_latents, patch_feat_dim)
             selected_patch_embeddings = selected_patch_embeddings.squeeze(1)  # (b * t, n_patch_latents, patch_feat_dim)
             selected_patch_embeddings = selected_patch_embeddings.view(batch_size, sequence_length, self.n_patch_latents_2d, self.patch_feat_dim) 
-            # 把坐标点embedding 并resample到3个点
-            x_embeddings = self.embed_traj_2d(action_2d[:, :, :, 0])
-            y_embeddings = self.embed_traj_2d(action_2d[:, :, :, 1])
-            embed_traj_2d = torch.cat((x_embeddings, y_embeddings), dim=-1)
-            embed_traj_2d = self.traj_2d_resampler(embed_traj_2d)
+            # idea1 把坐标点embedding 作为resampler信号
+            # x_embeddings = self.embed_traj_2d(action_2d[:, :, :, 0])
+            # y_embeddings = self.embed_traj_2d(action_2d[:, :, :, 1])
+            # embed_traj_2d = torch.cat((x_embeddings, y_embeddings), dim=-1)
             # embed_traj_2d = embed_traj_2d.view(batch_size*sequence_length, -1,embed_traj_2d.shape[-1])  # (b*t,points_num, h)
             # # action_2d_traj = action_2d_traj + time_embeddings.view(sequence_length, 1, self.hidden_size)
             # # stacked_inputs = torch.cat((stacked_inputs, action_2d_traj), dim=2) 
@@ -315,11 +270,9 @@ class GR1(nn.Module):
             hand_patch_embeddings = self.embed_hand_patch(hand_patch_embeddings.float())  # (b, t, n_patch_latents, h)
         
         # Add timestep embeddings
-        time_embeddings = self.embed_timestep.weight  # (sqe, h)
+        time_embeddings = self.embed_timestep.weight  # (l, h)
         lang_embeddings = lang_embeddings.view(batch_size, 1, -1) + time_embeddings
         state_embeddings = state_embeddings + time_embeddings
-        if self.use_2d_traj:
-            embed_traj_2d = embed_traj_2d + time_embeddings.view(sequence_length, 1, self.hidden_size)
         patch_embeddings = patch_embeddings + time_embeddings.view(sequence_length, 1, self.hidden_size)
         obs_embeddings = obs_embeddings + time_embeddings
         if self.use_hand_rgb:
@@ -330,19 +283,11 @@ class GR1(nn.Module):
         lang_embeddings = lang_embeddings.view(batch_size, sequence_length, 1, self.hidden_size)
         state_embeddings = state_embeddings.view(batch_size, sequence_length, 1, self.hidden_size)
         obs_embeddings = obs_embeddings.view(batch_size, sequence_length, 1, self.hidden_size)
-        if self.use_2d_traj:
-            stacked_inputs = torch.cat(
+        stacked_inputs = torch.cat(
                 (lang_embeddings, 
-                state_embeddings, 
-                embed_traj_2d,
-                patch_embeddings, 
-                obs_embeddings), dim=2)  # (b, t, n_tokens, h)
-        else:
-            stacked_inputs = torch.cat(
-                    (lang_embeddings, 
-                    state_embeddings, 
-                    patch_embeddings, 
-                    obs_embeddings), dim=2)  # (b, t, n_tokens, h)
+                 state_embeddings, 
+                 patch_embeddings, 
+                 obs_embeddings), dim=2)  # (b, t, n_tokens, h)
         if self.use_hand_rgb:
             hand_obs_embeddings = hand_obs_embeddings.view(batch_size, sequence_length, 1, self.hidden_size)
             stacked_inputs = torch.cat(
@@ -369,23 +314,18 @@ class GR1(nn.Module):
         n_lang_tokens = 1
         n_state_tokens = 1
         if self.use_2d_traj:
-            n_traj_2d_tokens = self.traj_2d_tokens
             n_patch_2d_tokens = self.n_patch_latents_2d
         n_patch_tokens = self.n_patch_latents
         n_obs_tokens = 1
         n_hand_patch_tokens = self.n_patch_latents
         n_hand_obs_tokens = 1
-        
-        # 汇总所有可见token INPUT
         n_tokens = n_lang_tokens + n_state_tokens + n_patch_tokens + n_obs_tokens
         if self.use_2d_traj:
-            n_tokens += n_traj_2d_tokens
             n_tokens += n_patch_2d_tokens
         if self.use_hand_rgb:
             n_tokens += n_hand_obs_tokens
             n_tokens += n_hand_patch_tokens
-            
-        # 汇总所有生成的token OUTPUT
+
         n_act_pred_tokens = self.chunk_size
         if self.act_pred:
             act_query_token_start_i = n_tokens
@@ -405,7 +345,6 @@ class GR1(nn.Module):
         stacked_attention_mask = attention_mask.view(batch_size, sequence_length, 1)
         unmasked_tokens = n_lang_tokens + n_state_tokens + n_patch_tokens + n_obs_tokens
         if self.use_2d_traj:
-            unmasked_tokens += n_traj_2d_tokens
             unmasked_tokens += n_patch_2d_tokens
         if self.use_hand_rgb:
             unmasked_tokens += n_hand_obs_tokens
@@ -442,8 +381,7 @@ class GR1(nn.Module):
                 action_embedding = pred_act_mlp(action_embedding)
             arm_action_preds = self.pred_arm_act(action_embedding)  # (b, t, chunk_size, act_dim - 1)
             gripper_action_preds = self.pred_gripper_act(action_embedding)  # (b, t, chunk_size, 1)
-            traj_2d_preds = self.pred_2d_points(action_embedding)
-            traj_2d_preds = traj_2d_preds.reshape(batch_size,sequence_length,self.pred_2d_points_num,-1)# (b, t, pred_2d_points_num, 2)
+            
         # Forward prediction vision decoder
         if self.fwd_pred:
             mask_token = self.mask_token  # (1, 1, 1, h)
@@ -474,11 +412,9 @@ class GR1(nn.Module):
         prediction = {
             'obs_preds': obs_preds,
             'obs_targets': obs_targets,
-            'masked_2d_patch': masked_patch, # 基于2d点的patch索引
             'obs_hand_preds': obs_hand_preds,
             'obs_hand_targets': obs_hand_targets,
             'arm_action_preds': arm_action_preds,
             'gripper_action_preds': gripper_action_preds,
-            'traj_2d_preds': traj_2d_preds
         }
         return prediction

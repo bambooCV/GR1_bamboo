@@ -20,6 +20,26 @@
         ]
     },
     {
+        "sequence_number": 7,
+        "state": {
+            "led": 0,
+            "lightbulb": 0,
+            "slider": "left",
+            "drawer": "open",
+            "red_block": "table",
+            "blue_block": "slider_right",
+            "pink_block": "table",
+            "grasped": 0
+        },
+        "result": [
+            "push_pink_block_right",
+            "lift_pink_block_table",
+            "place_in_slider",
+            "push_into_drawer",
+            "close_drawer"
+        ]
+    },
+    {
         "sequence_number": 10,
         "state": {
             "led": 0,
@@ -77,26 +97,6 @@
             "open_drawer",
             "turn_on_lightbulb",
             "lift_blue_block_table"
-        ]
-    },
-    {
-        "sequence_number": 7,
-        "state": {
-            "led": 0,
-            "lightbulb": 0,
-            "slider": "left",
-            "drawer": "open",
-            "red_block": "table",
-            "blue_block": "slider_right",
-            "pink_block": "table",
-            "grasped": 0
-        },
-        "result": [
-            "push_pink_block_right",
-            "lift_pink_block_table",
-            "place_in_slider",
-            "push_into_drawer",
-            "close_drawer"
         ]
     },
     {

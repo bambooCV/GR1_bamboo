@@ -349,57 +349,72 @@ if __name__ == '__main__':
             
         # evaluation
         with tqdm(total=len(val_loader), desc=f"Val Epoch {epoch+1}", leave=False,disable= not acc.is_main_process) as pbar:
-
+            eval_flag = False
             with torch.no_grad():
                 batch, load_time = val_prefetcher.next()
                 val_index = 0
-                while batch is not None:
-                    model.eval()
-                    language = batch['inst_token']
-                    image = batch['rgb_static']
-                    naction = batch['actions']
-                    # example inputs
-                    rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=False)  
-                    naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)   # diffusion label    
-                    naction_trans_norm = normalize_data(naction_transformed)
-                    noisy_action = torch.randn(naction.shape, device=device)
-                    batch_val_size,sequence,chunk_size,dim = noisy_action.shape
-                    noisy_action = noisy_action.reshape(batch_val_size*sequence,chunk_size,dim)
-                    out_action = noisy_action
-                    # init scheduler
-                    noise_scheduler.set_timesteps(num_diffusion_iters)
-                    language_embedding, obs_embeddings, patch_embeddings = None, None, None
-                    for k in noise_scheduler.timesteps:
-                        # predict noise
-                        noise_pred, language_embedding, obs_embeddings, patch_embeddings = model(rgb_static_norm, language, timesteps=k, noisy_actions=out_action,
-                                            language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
-                        # inverse diffusion step (remove noise)
-                        out_action = noise_scheduler.step(
-                            model_output=noise_pred,
-                            timestep=k,
-                            sample=out_action
-                        ).prev_sample
-                    re_out_action = unnormalize_data(out_action)
-                    val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
-                    if wandb_model and acc.is_main_process:
-                        wandb.log({'val_sample_loss': val_sample_loss})
-                                    # logging
-                    val_total_loss += val_sample_loss.item()
-                    pbar.set_postfix(
-                        ordered_dict={
-                            "epoch": epoch,
-                            "val_loss": val_sample_loss.item(),
-                        }
-                    )
-                    pbar.update(1)
-                    batch, load_time = val_prefetcher.next()
-                    val_index = val_index + 1
-                        
-                avg_val_loss = val_total_loss/val_index
+                # 算 light bulb
+                while batch is not None: # and val_index < 20:
+                    for inst in batch['inst']:
+                        if "lightbulb" in inst or "light bulb" in inst:
+                            eval_flag = True
+                    if eval_flag:
+                        model.eval()
+                        language = batch['inst_token']
+                        image = batch['rgb_static']
+                        naction = batch['actions']
+                        # example inputs
+                        rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=False)  
+                        naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)   # diffusion label    
+                        naction_trans_norm = normalize_data(naction_transformed)
+                        noisy_action = torch.randn(naction.shape, device=device)
+                        batch_val_size,sequence,chunk_size,dim = noisy_action.shape
+                        noisy_action = noisy_action.reshape(batch_val_size*sequence,chunk_size,dim)
+                        out_action = noisy_action
+                        # init scheduler
+                        noise_scheduler.set_timesteps(num_diffusion_iters)
+                        language_embedding, obs_embeddings, patch_embeddings = None, None, None
+                        for k in noise_scheduler.timesteps:
+                            # predict noise
+                            noise_pred, language_embedding, obs_embeddings, patch_embeddings = model(rgb_static_norm, language, timesteps=k, noisy_actions=out_action,
+                                                language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
+                            # inverse diffusion step (remove noise)
+                            out_action = noise_scheduler.step(
+                                model_output=noise_pred,
+                                timestep=k,
+                                sample=out_action
+                            ).prev_sample
+                        re_out_action = unnormalize_data(out_action)
+                        val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
+                        if wandb_model and acc.is_main_process:
+                            wandb.log({'val_sample_loss': val_sample_loss})
+                                        # logging
+                        val_total_loss += val_sample_loss.item()
+                        pbar.set_postfix(
+                            ordered_dict={
+                                "epoch": epoch,
+                                "val_loss": val_sample_loss.item(),
+                            }
+                        )
+                        pbar.update(1)
+                        batch, load_time = val_prefetcher.next()
+                        val_index = val_index + 1
+                    else:
+                        pbar.set_postfix(
+                            ordered_dict={
+                                "epoch": epoch,
+                                "val_loss": 0,
+                            }
+                        )
+                        pbar.update(1)
+                        batch, load_time = val_prefetcher.next()                       
+                if val_index == 0:
+                    avg_val_loss = 9999
+                else:
+                    avg_val_loss = val_total_loss/val_index
                 if wandb_model and acc.is_main_process:
                     wandb.log({'avg_val_loss': avg_val_loss})
             if acc.is_main_process:
-
                 print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')
         
        

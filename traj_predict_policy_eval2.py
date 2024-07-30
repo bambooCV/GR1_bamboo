@@ -6,7 +6,7 @@ import torch.nn as nn
 from traj_predict.model.transformer_for_diffusion import TransformerForDiffusion 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 import models.vision_transformer as vits
-from traj_predict.traj_diffusion_data_loader import LMDBDataset,DataPrefetcher
+from traj_predict.traj_diffusion_data_loader import LMDBDataset,DataPrefetcher,contains_words
 from torch.utils.data import DataLoader
 from torchvision.transforms.v2 import Resize, RandomResizedCrop 
 from PIL import Image
@@ -176,7 +176,7 @@ if __name__ == '__main__':
         chunk_size = 30,# 最长不超过30
         action_dim = 2, # x,y,gripper_state
         start_ratio = 0,
-        end_ratio = 0.95, 
+        end_ratio = 0.9, 
     )
     val_dataset = LMDBDataset(
         lmdb_dir = lmdb_dir, 
@@ -200,7 +200,7 @@ if __name__ == '__main__':
         batch_size=batch_size, # to be flattened in prefetcher  
         num_workers=num_workers,
         pin_memory=True, # Accelerate data reading
-        shuffle=True,
+        shuffle=False,
         prefetch_factor=2,
         persistent_workers=True,
     ) 
@@ -209,7 +209,8 @@ if __name__ == '__main__':
              
     model = TrajPredictPolicy()
     # 预训练模型读入
-    model_path = "Save/diffusion_2D_trajectory/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
+    # model_path = "Save/diffusion_2D_trajectory/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
+    model_path = "Save/ddp_task_ABC_D_best_checkpoint_24.pth"
     state_dict = torch.load(model_path,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict.items():
@@ -236,85 +237,96 @@ if __name__ == '__main__':
     )
     val_total_loss = 0
     val_index = 0
+    colors = ["pink", "blue", "red"]
+    directions = ["right", "left"]
+    exclude_words = ["rotate"]
+    include_conditions = [(color, direction) for color in colors for direction in directions]
     with tqdm(total=len(val_loader), desc=f"Val Epoch {72}", leave=False) as pbar:
-        # evaluation
-        with torch.no_grad():
-            batch, load_time = val_prefetcher.next()
-            # while batch is not None and val_index < 100:
-            while batch is not None:
-                model.eval()
-                language = batch['inst_token']
-                language_embedding = batch['inst_emb']
-                image = batch['rgb_static']
-                naction = batch['actions']
-                # example inputs
-                rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=False)  
-                naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)   # diffusion label    
-                naction_trans_norm = normalize_data(naction_transformed)
-                noisy_action = torch.randn(naction.shape, device=device)
-                batch_val_size,sequence,chunk_size,dim = noisy_action.shape
-                noisy_action = noisy_action.reshape(batch_val_size*sequence,chunk_size,dim)
-                out_action = noisy_action
-                # init scheduler
-                noise_scheduler.set_timesteps(num_diffusion_iters)
-                language_embedding, obs_embeddings, patch_embeddings = None, None, None
-                # val_sample_loss_values = []
-                start_time = time()
-
-                for k in noise_scheduler.timesteps:
-                    # predict noise
-                    noise_pred, language_embedding, obs_embeddings, patch_embeddings = model(rgb_static_norm, language, timesteps=k, noisy_actions=out_action,
-                                        language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
-                    # inverse diffusion step (remove noise)
-                    out_action = noise_scheduler.step(
-                        model_output=noise_pred,
-                        timestep=k,
-                        sample=out_action
-                    ).prev_sample
-                    # val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
-                    # val_sample_loss_values.append(val_sample_loss.cpu())
-                end_time = time()
-                execution_time = end_time - start_time
-
-                # print(f"Code block executed in {execution_time} seconds.")
-                # plt.figure(figsize=(10, 6))
-                # plt.plot(noise_scheduler.timesteps, val_sample_loss_values, marker='o', linestyle='-', color='b')
-                # plt.xlabel('Timestep (k)')
-                # plt.ylabel('Validation Sample Loss (MSE)')
-                # plt.title('Validation Sample Loss vs Timestep')
-                # plt.grid(True)
-                # plt.gca().invert_xaxis()  # 将横坐标从 100 到 0 反转显示
-                # plt.show()
-                
-                re_out_action = unnormalize_data(out_action)
-                val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
-                val_total_loss += val_sample_loss.item()
-                # visualization croped image
-                # ################Convert tensor to NumPy array for visualization
-                re_out_action = re_out_action.unsqueeze(1)
-                import cv2
-                for batch_idx in range(image.shape[0]):
-                    for seq_idx in range(image.shape[1]):
-
-                        rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                        # for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
-                        #     cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                        rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
-                        # cv2.putText(rgb_static_np, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                        cv2.imshow("Ori Cropped I mage", rgb_static_np)
-                        
-                        rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                        for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
-                            cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                        rgb_static_np2 = (rgb_static_np2 * 255).astype(np.uint8)
-                        cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                        cv2.imshow("Pred Cropped I mage", rgb_static_np2)
-                        
-                        
-                        cv2.waitKey(0)
+            with torch.no_grad():
                 batch, load_time = val_prefetcher.next()
-                val_index = val_index + 1
-                pbar.update(1)
+                val_index = 0
+                # 算 light bulb
+                while batch is not None: # and val_index < 20:
+                    eval_flag = False
+                    for inst in batch['inst']:
+                        if "lightbulb" in inst or "light bulb" in inst:
+                        # if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions):
+                            eval_flag = True
+
+                    if eval_flag:
+                        model.eval()
+                        language = batch['inst_token']
+                        language_embedding = batch['inst_emb']
+                        image = batch['rgb_static']
+                        naction = batch['actions']
+                        # example inputs
+                        rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=False)  
+                        naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)   # diffusion label    
+                        naction_trans_norm = normalize_data(naction_transformed)
+                        noisy_action = torch.randn(naction.shape, device=device)
+                        batch_val_size,sequence,chunk_size,dim = noisy_action.shape
+                        noisy_action = noisy_action.reshape(batch_val_size*sequence,chunk_size,dim)
+                        out_action = noisy_action
+                        # init scheduler
+                        noise_scheduler.set_timesteps(num_diffusion_iters)
+                        language_embedding, obs_embeddings, patch_embeddings = None, None, None
+                        # val_sample_loss_values = []
+                        start_time = time()
+
+                        for k in noise_scheduler.timesteps:
+                            # predict noise
+                            noise_pred, language_embedding, obs_embeddings, patch_embeddings = model(rgb_static_norm, language, timesteps=k, noisy_actions=out_action,
+                                                language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
+                            # inverse diffusion step (remove noise)
+                            out_action = noise_scheduler.step(
+                                model_output=noise_pred,
+                                timestep=k,
+                                sample=out_action
+                            ).prev_sample
+                            # val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
+                            # val_sample_loss_values.append(val_sample_loss.cpu())
+                        end_time = time()
+                        execution_time = end_time - start_time
+
+                        # print(f"Code block executed in {execution_time} seconds.")
+                        # plt.figure(figsize=(10, 6))
+                        # plt.plot(noise_scheduler.timesteps, val_sample_loss_values, marker='o', linestyle='-', color='b')
+                        # plt.xlabel('Timestep (k)')
+                        # plt.ylabel('Validation Sample Loss (MSE)')
+                        # plt.title('Validation Sample Loss vs Timestep')
+                        # plt.grid(True)
+                        # plt.gca().invert_xaxis()  # 将横坐标从 100 到 0 反转显示
+                        # plt.show()
+                        
+                        re_out_action = unnormalize_data(out_action)
+                        val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
+                        val_total_loss += val_sample_loss.item()
+                        # visualization croped image
+                        # ################Convert tensor to NumPy array for visualization
+                        re_out_action = re_out_action.unsqueeze(1)
+                        import cv2
+                        for batch_idx in range(image.shape[0]):
+                            for seq_idx in range(image.shape[1]):
+
+                                rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                                # for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
+                                #     cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                                rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
+                                # cv2.putText(rgb_static_np, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                                cv2.imshow("Ori Cropped I mage", rgb_static_np)
+                                
+                                rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                                for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
+                                    cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                                rgb_static_np2 = (rgb_static_np2 * 255).astype(np.uint8)
+                                cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                                cv2.imshow("Pred Cropped I mage", rgb_static_np2)
+                                
+                                
+                                cv2.waitKey(0)
+                    batch, load_time = val_prefetcher.next()
+                    val_index = val_index + 1
+                    pbar.update(1)
             avg_val_loss = val_total_loss/val_index
             print(f"avg_val_loss: {avg_val_loss}")
        

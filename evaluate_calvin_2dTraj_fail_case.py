@@ -27,9 +27,11 @@ import json
 import logging
 import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
-os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '5'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from pathlib import Path
 import sys
 import time
@@ -64,6 +66,7 @@ import clip
 from PreProcess import PreProcess
 import models.vision_transformer as vits 
 from models.gr1_2d import GR1 
+# from models.gr1_2d_idea1_done import GR1 
 import cv2
 logger = logging.getLogger(__name__)
 
@@ -211,7 +214,8 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
             # inference traj inference
             img_copy = copy.deepcopy(obs['rgb_obs']['rgb_static'])
             img_copy_vis = cv2.cvtColor(img_copy, cv2.COLOR_BGR2RGB)
-            for point_2d in re_out_action:
+            point_2d_resized = re_out_action * 200/224
+            for point_2d in point_2d_resized :
                 cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
                 cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
             cv2.imshow("Pred Image Final", img_copy_vis)          
@@ -236,7 +240,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('configs_eval_2dTraj_fail_case.json'))
+    cfg = json.load(open('configs_eval_2dTraj_fail_case_test.json'))
     # The timeout here is 36000s to wait for other processes to finish the simulation
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
     acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])
@@ -294,7 +298,8 @@ def main():
         model = torch.compile(model)
     model_traj = TrajPredictPolicy(model_mae,model_clip)
     # 预训练模型读入
-    model_path_traj = "Save/diffusion_2D_trajectory/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
+    # model_path_traj = "Save/diffusion_2D_trajectory/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
+    model_path_traj = "Save/ddp_task_ABC_D_best_checkpoint_24.pth"
     state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict_traj.items():

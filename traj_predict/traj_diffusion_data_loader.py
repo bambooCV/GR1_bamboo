@@ -5,15 +5,21 @@ import lmdb
 from pickle import loads
 import numpy as np
 import torch
+from torchvision import transforms
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from torchvision.io import decode_jpeg
 from torch.utils.data import DataLoader
+import random
+
 ORIGINAL_STATIC_RES = 200
 ORIGINAL_GRIPPER_RES = 84
-def contains_all_words(inst, words):
-    for word in words:
+def contains_words(inst, include_words=[], exclude_words=[]):
+    for word in include_words:
         if word not in inst:
+            return False
+    for word in exclude_words:
+        if word in inst:
             return False
     return True
 def resample_sequence(sequence, target_length):
@@ -33,6 +39,7 @@ def resample_sequence(sequence, target_length):
     resampled_sequence = torch.round(resampled_sequence).int()
     
     return resampled_sequence
+
 class DataPrefetcher():
     def __init__(self, loader, device):
         self.device = device
@@ -84,6 +91,9 @@ class LMDBDataset(Dataset):
         self.dummy_actions = torch.zeros(sequence_length,chunk_size, action_dim)
         self.dummy_mask = torch.zeros(sequence_length)
         self.lmdb_dir = lmdb_dir
+        self.left_num = 0
+        self.right_num = 0
+ 
         env = lmdb.open(lmdb_dir, readonly=True, create=False, lock=False)
         with env.begin() as txn:
             dataset_len = loads(txn.get('cur_step'.encode())) + 1
@@ -125,13 +135,22 @@ class LMDBDataset(Dataset):
  
 
                 actions[i,:,:] = resample_sequence(future_2d_actions[:,:2], self.chunk_size)
-                
-                # 可视化 action ori 和 downsample的
+                # 图像增强 针对light bulb 做特殊处理
+                if "lightbulb" in inst or "light bulb" in inst:
+                    if random.random() > 0.5:
+                    # if random.random() > 0.33: # 更多的图像flipping
+                        rgb_static[i] = transforms.functional.hflip(rgb_static[i])
+                        actions[i][:,0] = rgb_static[i].shape[-1] - actions[i][:,0]
                 # visualization 轨迹
-                # words_to_check = ["push", "pink", "block", "right"]
-
-                # if contains_all_words(inst, words_to_check):
-                # # if "lightbulb" in inst or "light bulb" in inst:
+                # colors = ["pink", "blue", "red"]
+                # directions = ["right", "left"]
+                # exclude_words = ["rotate","turn"]
+                # include_conditions = [(color, direction) for color in colors for direction in directions]
+                # if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions):
+                #     if "left" in inst:
+                #         self.left_num += 1
+                #     elif "right" in inst:
+                #         self.right_num += 1
                 #     import cv2
                 #     rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
                 #     for point_2d in future_2d_actions[:,:2]:
@@ -142,9 +161,9 @@ class LMDBDataset(Dataset):
                     
                 #     cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
                 #     cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
-                    # cv2.waitKey(0)
-
-
+                #     # cv2.waitKey(0)
+                #     print(f"left num: {self.left_num}, right num: {self.right_num}")
+                
         return {
             'rgb_static': rgb_static,
             'rgb_gripper': rgb_gripper,
@@ -163,7 +182,7 @@ class LMDBDataset(Dataset):
 if __name__ == '__main__':
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 1
+    batch_size = 32
     num_workers = 1
     train_dataset = LMDBDataset(
         # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb", 
@@ -188,7 +207,7 @@ if __name__ == '__main__':
         batch_size=batch_size, # to be flattened in prefetcher  
         num_workers=num_workers,
         pin_memory=True, # Accelerate data reading  
-        shuffle=True,
+        shuffle=False,
         prefetch_factor=2,
         persistent_workers=True,
     ) 
@@ -203,10 +222,10 @@ if __name__ == '__main__':
     ) 
     train_prefetcher = DataPrefetcher(train_loader, device)
     test_prefetcher = DataPrefetcher(val_loader, device)
-    for epoch in range(10):
-        batch, load_time = test_prefetcher.next()
+    for epoch in range(1):
+        batch, load_time = train_prefetcher.next()
         while batch is not None:
             
             # print(batch)
-            batch, load_time = test_prefetcher.next()
+            batch, load_time = train_prefetcher.next()
         
