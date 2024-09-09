@@ -26,12 +26,12 @@ import argparse
 import json
 import logging
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '5'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 from pathlib import Path
 import sys
 import time
@@ -67,11 +67,11 @@ from PreProcess import PreProcess
 import models.vision_transformer as vits 
 
 from models.gr1_2d_prompt import GR1
-# from models.gr1_2d_prompt_behind import GR1
+
 
 import cv2
 logger = logging.getLogger(__name__)
-cvshow_flag = True
+cvshow_flag = False
 os.environ["FFMPEG_BINARY"] = "auto-detect"
 os.environ['CALVIN_ROOT'] = "/gpfsdata/home/shichao/EmbodiedAI/manipulation/calvin"
 CALVIN_ROOT = os.environ['CALVIN_ROOT']
@@ -264,7 +264,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('configs_eval_2dTraj_fail_case_test.json'))
+    cfg = json.load(open('configs_eval_2dTraj_fail_case_with_pretrain.json'))
     # The timeout here is 36000s to wait for other processes to finish the simulation
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
     acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])

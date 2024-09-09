@@ -1,6 +1,6 @@
 use_r1_2d_prompt_splitquery_roiImg = False
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
@@ -315,7 +315,8 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('configs_2dTraj_3090_scratch.json'))
+    cfg = json.load(open('taskD_D_configs_2dTraj_3090_scratch.json'))
+    # cfg = json.load(open('taskD_D_configs_2dTraj_test.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -340,7 +341,7 @@ if __name__ == '__main__':
         cfg['action_mode'],
         cfg['act_dim'],
         start_ratio = 0,
-        end_ratio = 0.9, 
+        end_ratio = 0.95, 
     )
     test_dataset = LMDBdst_jpeg(
         cfg['LMDB_path'], 
@@ -348,7 +349,7 @@ if __name__ == '__main__':
         cfg['chunk_size'], 
         cfg['action_mode'],
         cfg['act_dim'],
-        start_ratio = 0.9,
+        start_ratio = 0.95,
         end_ratio = 1, 
     )
     train_loader = DataLoader(
@@ -369,8 +370,8 @@ if __name__ == '__main__':
         prefetch_factor=cfg['prefetch_factor'],
         persistent_workers=True,
     ) 
-    model_clip, _ = clip.load(cfg['clip_backbone']) 
-    model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0)
+    model_clip, _ = clip.load(cfg['clip_backbone'], device=device) 
+    model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0).to(device)
     checkpoint = torch.load(cfg['mae_ckpt'])
     model_mae.load_state_dict(checkpoint['model'], strict=False)
     if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
@@ -406,9 +407,9 @@ if __name__ == '__main__':
         n_positions=cfg['n_positions'],
         resid_pdrop=cfg['dropout'],
         attn_pdrop=cfg['dropout'],
-    ).to(device)
+    ).to(device)  # for fused optimizer
     if cfg['load_bytedance_ckpt']:
-        pretrained_dict = torch.load(cfg['bytedance_ckpt_path'],map_location=device)['state_dict']
+        pretrained_dict = torch.load(cfg['bytedance_ckpt_path'])['state_dict']
        # 过滤掉与 model_mae 和 text_encoder 相关的层
         filtered_pretrained_dict = {
             k: v for k, v in pretrained_dict.items() if 'model_mae' not in k and 'text_encoder' not in k
@@ -416,9 +417,6 @@ if __name__ == '__main__':
         missing_keys, unexpected_keys = model.load_state_dict(filtered_pretrained_dict, strict=False)
         
         acc.print('load ', cfg['bytedance_ckpt_path'], '\nmissing ', missing_keys, '\nunexpected ', unexpected_keys)
-        # 删除不再需要的变量以释放内存
-        del pretrained_dict,filtered_pretrained_dict
-        torch.cuda.empty_cache()
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
         state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)

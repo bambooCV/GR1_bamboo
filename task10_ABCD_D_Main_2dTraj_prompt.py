@@ -1,6 +1,6 @@
 use_r1_2d_prompt_splitquery_roiImg = False
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
@@ -315,7 +315,8 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('configs_2dTraj_3090_scratch.json'))
+    cfg = json.load(open('task10_ABCD_D_configs_2dTraj_3090_scratch.json'))
+    # cfg = json.load(open('task10_ABCD_D_configs_2dTraj_test.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -340,7 +341,7 @@ if __name__ == '__main__':
         cfg['action_mode'],
         cfg['act_dim'],
         start_ratio = 0,
-        end_ratio = 0.9, 
+        end_ratio = 0.09, 
     )
     test_dataset = LMDBdst_jpeg(
         cfg['LMDB_path'], 
@@ -348,7 +349,7 @@ if __name__ == '__main__':
         cfg['chunk_size'], 
         cfg['action_mode'],
         cfg['act_dim'],
-        start_ratio = 0.9,
+        start_ratio = 0.99,
         end_ratio = 1, 
     )
     train_loader = DataLoader(

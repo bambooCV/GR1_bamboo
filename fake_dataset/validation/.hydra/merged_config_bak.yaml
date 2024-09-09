@@ -125,7 +125,6 @@ scene:
     fixed_objects:
       table:
         file: calvin_table_D/urdf/calvin_table_D.urdf
-        # file: calvin_table_A/urdf/calvin_table_A.urdf
         initial_pos:
         - 0
         - 0
@@ -168,7 +167,6 @@ scene:
         initial_pos: any
         initial_orn: any
       block_blue:
-        # file: blocks/block_green_small.urdf
         file: blocks/block_blue_small.urdf
         initial_pos: any
         initial_orn: any

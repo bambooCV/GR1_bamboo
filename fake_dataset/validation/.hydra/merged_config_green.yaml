@@ -125,7 +125,6 @@ scene:
     fixed_objects:
       table:
         file: calvin_table_D/urdf/calvin_table_D.urdf
-        # file: calvin_table_A/urdf/calvin_table_A.urdf
         initial_pos:
         - 0
         - 0
@@ -168,8 +167,11 @@ scene:
         initial_pos: any
         initial_orn: any
       block_blue:
-        # file: blocks/block_green_small.urdf
         file: blocks/block_blue_small.urdf
+        initial_pos: any
+        initial_orn: any
+      block_green:
+        file: blocks/block_green_small.urdf
         initial_pos: any
         initial_orn: any
       block_pink:
@@ -220,6 +222,14 @@ tasks:
     - rotate_object
     - block_red
     - 60
+    rotate_green_block_right:
+    - rotate_object
+    - block_green
+    - -60
+    rotate_green_block_left:
+    - rotate_object
+    - block_green
+    - 60
     rotate_blue_block_right:
     - rotate_object
     - block_blue
@@ -244,6 +254,16 @@ tasks:
     push_red_block_left:
     - push_object
     - block_red
+    - -0.1
+    - 0
+    push_green_block_right:
+    - push_object
+    - block_green
+    - 0.1
+    - 0
+    push_green_block_left:
+    - push_object
+    - block_green
     - -0.1
     - 0
     push_blue_block_right:
@@ -297,6 +317,24 @@ tasks:
     lift_red_block_drawer:
     - lift_object
     - block_red
+    - 0.05
+    - table
+    - drawer_link
+    lift_green_block_table:
+    - lift_object
+    - block_green
+    - 0.05
+    - table
+    - base_link
+    lift_green_block_slider:
+    - lift_object
+    - block_green
+    - 0.03
+    - table
+    - plank_link
+    lift_green_block_drawer:
+    - lift_object
+    - block_green
     - 0.05
     - table
     - drawer_link
@@ -371,6 +409,7 @@ tasks:
     push_into_drawer:
     - push_object_into
     - - block_red
+      - block_green
       - block_blue
       - block_pink
     - table

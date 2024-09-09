@@ -1,0 +1,64 @@
+[  
+
+    {
+        "sequence_number": 205,
+        "state": {
+            "led": 1,
+            "lightbulb": 0,
+            "slider": "right",
+            "drawer": "open",
+            "red_block": "slider_right",
+            "blue_block": "slider_left",
+            "pink_block": "table",
+            "grasped": 0
+        },
+        "result": [
+            "rotate_pink_block_left",
+            "close_drawer",
+            "lift_blue_block_slider",
+            "place_in_slider",
+            "move_slider_left"
+        ]
+    },
+    {
+        "sequence_number": 300,
+        "state": {
+            "led": 0,
+            "lightbulb": 0,
+            "slider": "right",
+            "drawer": "open",
+            "red_block": "table",
+            "blue_block": "slider_left",
+            "pink_block": "slider_right",
+            "grasped": 0
+        },
+        "result": [
+            "rotate_red_block_right",
+            "turn_on_led",
+            "close_drawer",
+            "move_slider_left",
+            "lift_red_block_table"
+        ]
+    },
+    {
+        "sequence_number": 301,
+        "state": {
+            "led": 0,
+            "lightbulb": 0,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "slider_left",
+            "blue_block": "slider_right",
+            "pink_block": "table",
+            "grasped": 0
+        },
+        "result": [
+            "open_drawer",
+            "push_pink_block_right",
+            "turn_on_lightbulb",
+            "move_slider_left",
+            "lift_pink_block_table"
+        ]
+    }
+
+]

@@ -1,6 +1,6 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import sys
@@ -33,7 +33,7 @@ def contains_words(inst, include_words=[], exclude_words=[]):
             return False
     return True
 def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
-    save_path = os.path.join(save_dir, f'ddp_task_ABC_D_best_checkpoint_120.pth')
+    save_path = os.path.join(save_dir, f'ddp_task_D_D_best_checkpoint_118_e{epoch}.pth')
     
     # 要排除的模块列表
     modules_to_exclude = ['model_mae', 'model_clip']
@@ -41,7 +41,7 @@ def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
     state_dict = {k: v for k, v in model.state_dict().items() if not any(module_name in k for module_name in modules_to_exclude)}
     # 保存状态
     torch.save({
-        'epoch': epoch,
+        # 'epoch': epoch,
         'model_state_dict': state_dict,
         # 'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss 
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     )
     wandb_model = True
     if wandb_model and acc.is_main_process:
-        wandb.init(project='robotic traj diffusion task_ABC_D arguement', group='robotic traj diffusion', name='DDP traj diffusion_ABC_D_0821_2')
+        wandb.init(project='robotic traj diffusion task_D_D arguement', group='robotic traj diffusion', name='DDP traj diffusion_D_D_0823')
     device = acc.device
     # config prepare
     epoch_num = 100
@@ -157,11 +157,11 @@ if __name__ == '__main__':
     batch_size_val = 64
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb_V1"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
-        rgb_static_pad = 10, # 去除位置敏感性
+        rgb_static_pad = 20, # 去除位置敏感性
         rgb_gripper_pad = 4,
         rgb_shape = [224,224], 
         rgb_mean = [0.485, 0.456, 0.406],
@@ -176,7 +176,7 @@ if __name__ == '__main__':
         chunk_size = 30,# 最长不超过30
         action_dim = 2, # x,y,gripper_state
         start_ratio = 0,
-        end_ratio = 0.9, 
+        end_ratio = 0.95, 
     )
     val_dataset = LMDBDataset(
         lmdb_dir = lmdb_dir, 
@@ -330,9 +330,10 @@ if __name__ == '__main__':
             avg_train_loss = total_loss/len(train_loader)
             if wandb_model and acc.is_main_process:
                 wandb.log({'avg_train_loss': avg_train_loss})
-            if avg_train_loss < best_loss:
-                best_loss = avg_train_loss
-                save_checkpoint(epoch, model, optimizer, best_loss)
+            # 最低loss
+            # if avg_train_loss < best_loss:
+            #     best_loss = avg_train_loss
+            #     save_checkpoint(epoch, model, optimizer, best_loss)
             if acc.is_main_process:
 
                 print(f'Epoch {epoch+1}/{epoch_num}, Train Average Loss: {avg_train_loss:.4f})')
@@ -343,7 +344,7 @@ if __name__ == '__main__':
                 batch, load_time = val_prefetcher.next()
                 val_index = 0
                 # 算 light bulb
-                while batch is not None and val_index < 20:
+                while batch is not None and val_index < 500:
                     eval_flag = False
                     colors = ["pink", "blue", "red"]
                     directions = ["right", "left"]
@@ -354,7 +355,7 @@ if __name__ == '__main__':
                         if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions) or \
                            "lightbulb" in inst or "light bulb" in inst :
                             eval_flag = True
-
+                    eval_flag = True # 所有都测
                     if eval_flag:
                         model.eval()
                         language = batch['inst_token']
@@ -410,6 +411,10 @@ if __name__ == '__main__':
                     avg_val_loss = val_total_loss/val_index
                 if wandb_model and acc.is_main_process:
                     wandb.log({'avg_val_loss': avg_val_loss})
+                # 最低eval loss
+                if avg_val_loss < best_loss:
+                    best_loss = avg_val_loss
+                    save_checkpoint(epoch, model, optimizer, best_loss)
             if acc.is_main_process:
                 print(f'Epoch {epoch+1}/{epoch_num}, Val Average Loss: {avg_val_loss:.4f})')
         

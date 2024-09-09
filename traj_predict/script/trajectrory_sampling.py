@@ -14,6 +14,7 @@ from einops import rearrange, repeat
 import matplotlib.pyplot as plt
 import cv2
 import pickle
+
 from calvin_env.calvin_env.camera.static_camera import StaticCamera
 def worldtopixel_point(trajectory):
     point_2dprojection = []
@@ -186,4 +187,9 @@ if __name__ == '__main__':
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
     save_to_lmdb(args.output_dir, os.path.join(args.input_dir, 'training'))
+    print("training data finished")
     save_to_lmdb(args.output_dir, os.path.join(args.input_dir, 'validation'))
+    
+# python traj_predict/script/trajectrory_sampling.py --input_dir=/home/DATASET_PUBLIC/calvin/task_ABC_D --output=/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb_V1
+# python python traj_predict/script/trajectrory_sampling.py --input_dir=/home/DATASET_PUBLIC/calvin/task_D_D/ --output=/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb_V1
+

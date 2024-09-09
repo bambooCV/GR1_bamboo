@@ -132,7 +132,7 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         # Language
         # goal = 'grasp and lift the block'
         text = goal
-        text = 'grasp and lift the block'
+
         tokenized_text = self.tokenizer(text)
 
         # RGB
@@ -140,7 +140,7 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         hand_rgb = rearrange(torch.from_numpy(obs['rgb_obs']['rgb_gripper']), 'h w c -> c h w')
         self.rgb_list.append(rgb)
         self.hand_rgb_list.append(hand_rgb)
-
+        print(f"{procs_id} with {step}th debug eval_traj for position 1")
         # State
         state = obs['robot_obs']
         arm_state = state[:6]
@@ -195,7 +195,7 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         attention_mask = attention_mask.to(self.device)
 
         rgb_data, hand_rgb_data = self.preprocessor.rgb_process(rgb_data, hand_rgb_data, train=False)
-
+        print(f"{procs_id} debug eval_traj for position 2")
         re_diff_set = 200
         # 大策略
         if step == 0 or step%re_diff_set == 0 or diff_flag == True or self.strategy_flag == True:
@@ -208,7 +208,6 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 noisy_action = torch.randn([1,30,2], device=self.device)
                 out_action = noisy_action
                 language_embedding, obs_embeddings, patch_embeddings = None, None, None
-
                 for k in self.noise_scheduler.timesteps:
                         # predict noise
                         noise_pred, language_embedding, obs_embeddings, patch_embeddings = self.policy_traj(rgb_static_norm, tokenized_text, timesteps=k, noisy_actions=out_action,
@@ -221,6 +220,25 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                         ).prev_sample
                 re_out_action = unnormalize_data(out_action)
 
+                if ("lightbulb" in text or "light bulb"in text) and re_out_action[0][-1][0] < 150: 
+                    self.noise_scheduler.set_timesteps(self.num_diffusion_iters)
+                    rgb_static_norm = rgb_data[:,len(self.rgb_list)-1].unsqueeze(0)
+                    # rgb_static_norm = rgb_data[:,-1].unsqueeze(0)
+                    noisy_action = torch.randn([1,30,2], device=self.device)
+                    out_action = noisy_action
+                    language_embedding, obs_embeddings, patch_embeddings = None, None, None
+                    for k in self.noise_scheduler.timesteps:
+                            # predict noise
+                            noise_pred, language_embedding, obs_embeddings, patch_embeddings = self.policy_traj_bulb(rgb_static_norm, tokenized_text, timesteps=k, noisy_actions=out_action,
+                                                language_embedding=language_embedding, obs_embeddings=obs_embeddings, patch_embeddings=patch_embeddings)
+                            # inverse diffusion step (remove noise)
+                            out_action = self.noise_scheduler.step(
+                                model_output=noise_pred,
+                                timestep=k,
+                                sample=out_action
+                            ).prev_sample
+                    print("fsc lightbulb second time")
+                    re_out_action = unnormalize_data(out_action)
                 # 后处理 移动sliding door时候
                 if all(keyword in text for keyword in ["push the sliding door"]):
                     max_index = re_out_action[..., 0].argmax()
@@ -231,8 +249,7 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 self.traj_2d_list = []
                 for _ in range(10):
                     self.traj_2d_list.append(re_out_action.squeeze(0)) 
-
-
+        print(f"{procs_id} debug eval_traj for position 3")
         # 小策略
         state_total_tensor = torch.stack(self.state_total_list, dim=0)  
         if step > 30 and "the sliding door" in text and "left" in text: # 暂时只给sliding door用
@@ -339,7 +356,7 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 attention_mask=attention_mask
         )
 
-        if True:
+        if False:
             if debug:
                 # visualization image
                 p = 16
@@ -479,5 +496,5 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 elif max_index < min_index and dis_x > 60 and traj_2d_pred[0][0] * 224 < mid_x:
                     self.strategy_flag = True
                     self.once_flag = False
-
+        print(f"{procs_id} debug eval_traj for position 6")
         return action_pred,re_out_action,traj_2d_pred
