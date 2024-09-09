@@ -3,6 +3,7 @@ import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+# os.env#iron['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import math
 import json
@@ -22,7 +23,12 @@ from LMDBDataset_jpeg import LMDBDataset as LMDBdst_jpeg
 from LMDBDataset_jpeg import DataPrefetcher as DataPrefetcher_jpeg
 from traj_predict.traj_func import PreProcess
 import models.vision_transformer as vits
-from models.gr1_2d_prompt import GR1 
+# from models.gr1_2d_prompt_query5 import GR1 
+# from models.gr1_2d_prompt import GR1 
+use_r1_2d_prompt_splitquery_roiImg = True
+if use_r1_2d_prompt_splitquery_roiImg:
+    from models.gr1_2d_prompt_splitquery import GR1 
+# from models.gr1_2d_prompt_behind import GR1 
 from tqdm import tqdm
 from AccelerateFix import AsyncStep
 # fsc
@@ -70,37 +76,9 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
     eval_steps = train_dataset_len // test_dataset_len
     avg_reward = 0.0
     for epoch in range(cfg['num_epochs']):
-        # 每cfg['save_epochs']个epoch都保存，除了初始第一个epoch
-        if epoch % cfg['save_epochs'] == 0:
-            # in the 1st epoch, policy.ema has not been initialized. You may also load the wrong ckpt and modify the right one
-            if epoch != 0:
-                acc.wait_for_everyone()
-                unwrapped_model = acc.unwrap_model(model)
-                modules_to_exclude = ['model_mae', 'model_clip']
-                if hasattr(unwrapped_model, '_orig_mod'):
-                    state_dict = {k: v for k, v in unwrapped_model._orig_mod.state_dict().items() if not any(module_name in k for module_name in modules_to_exclude)}
-                else:
-                    state_dict = {k: v for k, v in unwrapped_model.state_dict().items() if not any(module_name in k for module_name in modules_to_exclude)}
-                acc.save({'state_dict': state_dict}, cfg['save_path']+'GR1_{}.pth'.format(epoch+cfg['load_epoch']))
-            # 保存的epoch是否需要评估 in ENV
-            if cfg['evaluate_during_training']:
-                model.eval()
-                avg_reward = torch.tensor(evaluate_policy(
-                    eva, 
-                    env,
-                    cfg['save_path']+ "epoch" + str(epoch) +'_success_rate.txt',
-                    cfg['save_path']+ "epoch" + str(epoch) +'_result.txt', 
-                    cfg['ep_len'],
-                    cfg['num_sequences'],
-                    acc.num_processes,
-                    acc.process_index,
-                    eval_dir,
-                    debug=cfg['record_evaluation_video'],
-                )).float().mean().to(device)
-                avg_reward = acc.gather_for_metrics(avg_reward).mean()
-
         log_loss = {
             'rgb_static_selected_patches':0,
+            'traj_2d_preds':0,
             'rgb_static': 0,
             'rgb_gripper': 0,
             'action_arm': 0,
@@ -109,6 +87,7 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
         }
         eval_log_loss = {
             'rgb_static_selected_patches':0,
+            'traj_2d_preds':0,
             'rgb_static': 0,
             'rgb_gripper': 0,
             'action_arm': 0,
@@ -135,30 +114,50 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                         hand_rgb=rgb_gripper_norm,
                         state={'arm': batch['arm_state'], 'gripper': batch['gripper_state']},
                         language=batch['inst_token'],
-                        action_2d = actions_2d_transformed,
+                        action_2d = actions_2d_transformed,# 224*224的坐标系
                         attention_mask=obs_mask,
                     )
-                    # 找索引块 作为监督信号，让模型更关注索引块的图像变化
-                    action_2d = torch.round(actions_2d_transformed).int()
-                    action_2d = torch.clamp(action_2d, min=0, max=223)
-                    num_patches_per_row = 224 // 16
-                    patch_row = action_2d[...,1] // 16
-                    patch_col = action_2d[...,0] // 16
-                    patch_index = patch_row * num_patches_per_row + patch_col
-                    masked_patch = torch.zeros((pred['obs_preds'].shape[0],pred['obs_preds'].shape[1],pred['obs_preds'].shape[2])).to(device)
-                    for patch_index_i in range(patch_index.size(0)):
-                        for patch_index_j in range(patch_index.size(1)):
-                            # 获取当前序列中的索引
-                            indices = patch_index[patch_index_i, patch_index_j]
-                            # 将 masked_patch 中对应位置设为 1
-                            masked_patch[patch_index_i, patch_index_j, indices] = 1
+                    # vis masked patch
+                    # import cv2
+                    # p = 16
+                    # h_p = 14
+                    # w_p = 14
+                    # rgb_vis= rgb_static_norm.reshape(shape=(rgb_static_norm.shape[0], rgb_static_norm.shape[1], 3, h_p, p, w_p, p)) 
+                    # rgb_vis = rgb_vis.permute(0, 1, 3, 5, 4, 6, 2)
+                    # rgb_vis = rgb_vis.reshape(shape=(rgb_vis.shape[0], rgb_vis.shape[1], h_p * w_p, (p**2) * 3))  # (b, t, n_patches, p*p*3)
+                    # mean = rgb_vis.mean(dim=-1, keepdim=True)
+                    # std = rgb_vis.var(dim=-1, unbiased=True, keepdim=True).sqrt() + 1e-6
+                    
+                    # patch_image = pred['masked_2d_patch'].unsqueeze(-1)*pred["obs_targets"]
+                    # patch_image = patch_image * std + mean
+                    # #reshape 196 to 224*224
+                    # patch_image = patch_image.reshape(pred["obs_targets"].shape[0], pred["obs_targets"].shape[1], h_p, w_p, p, p, 3)
+                    # patch_image = patch_image.permute(0, 1, 6, 2, 4, 3, 5)
+                    # patch_image = patch_image.reshape(pred["obs_targets"].shape[0], pred["obs_targets"].shape[1], 3, h_p * p, w_p * p)
+                    # patch_image = preprocessor.rgb_recovery(patch_image)
+                    
+                    # rgb_static_patch_image = cv2.cvtColor(patch_image[0][0].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                    
+                    # cv2.imshow('Patched RGB Static Image', rgb_static_patch_image)  # 注意这里需要调整回 HWC 格式
+                    # cv2.waitKey(0)
                     loss = {}
-                    loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,masked_patch)
-                    loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
+                    # new loss
+                    loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
+                    loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
+                    
+                    # old loss
                     loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                     loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
                     loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
-                    total_loss = loss['rgb_static_selected_patches'] + loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] 
+                    if use_r1_2d_prompt_splitquery_roiImg:
+                        total_loss = loss['rgb_static_selected_patches'] + loss['traj_2d_preds']\
+                                      + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] * cfg['arm_loss_ratio']/100
+                    else:
+
+                        loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
+                        total_loss = loss['rgb_static_selected_patches'] + loss['traj_2d_preds']\
+                                    + loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] * cfg['arm_loss_ratio']/100
+
                     loss['total_loss'] = total_loss
                     acc.backward(total_loss)
                     optimizer.step(optimizer)
@@ -180,21 +179,13 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                             action_2d = actions_2d_transformed_norm,
                             attention_mask=obs_mask,
                         )
-                        action_2d = torch.round(actions_2d_transformed).int()
-                        action_2d = torch.clamp(action_2d, min=0, max=223)
-                        num_patches_per_row = 224 // 16
-                        patch_row = action_2d[...,1] // 16
-                        patch_col = action_2d[...,0] // 16
-                        patch_index = patch_row * num_patches_per_row + patch_col
-                        masked_patch = torch.zeros((pred['obs_preds'].shape[0],pred['obs_preds'].shape[1],pred['obs_preds'].shape[2])).to(device)
-                        for patch_index_i in range(patch_index.size(0)):
-                            for patch_index_j in range(patch_index.size(1)):
-                                # 获取当前序列中的索引
-                                indices = patch_index[patch_index_i, patch_index_j]
-                                # 将 masked_patch 中对应位置设为 1
-                                masked_patch[patch_index_i, patch_index_j, indices] = 1
+
                         loss = {}
-                        loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,masked_patch)                       
+                        # new loss
+                        loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
+                        loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
+                    
+                        # old loss
                         loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                         loss['rgb_gripper'] = masked_loss(pred['obs_hand_preds'], pred['obs_hand_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
                         loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
@@ -264,10 +255,36 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                 if batch_idx == 28:
                     prof.stop()
                 '''
+        # 每cfg['save_epochs']个epoch都保存，除了初始第一个epoch
+        if epoch % cfg['save_epochs'] == 0:
+            acc.wait_for_everyone()
+            unwrapped_model = acc.unwrap_model(model)
+            modules_to_exclude = ['model_mae', 'model_clip']
+            if hasattr(unwrapped_model, '_orig_mod'):
+                state_dict = {k: v for k, v in unwrapped_model._orig_mod.state_dict().items() if not any(module_name in k for module_name in modules_to_exclude)}
+            else:
+                state_dict = {k: v for k, v in unwrapped_model.state_dict().items() if not any(module_name in k for module_name in modules_to_exclude)}
+            acc.save({'state_dict': state_dict}, cfg['save_path']+'GR1_{}.pth'.format(epoch+1+cfg['load_epoch']))
+            # 保存的epoch是否需要评估 in ENV
+            if cfg['evaluate_during_training']:
+                model.eval()
+                avg_reward = torch.tensor(evaluate_policy(
+                    eva, 
+                    env,
+                    cfg['save_path']+ "epoch" + str(epoch) +'_success_rate.txt',
+                    cfg['save_path']+ "epoch" + str(epoch) +'_result.txt', 
+                    cfg['ep_len'],
+                    cfg['num_sequences'],
+                    acc.num_processes,
+                    acc.process_index,
+                    eval_dir,
+                    debug=cfg['record_evaluation_video'],
+                )).float().mean().to(device)
+                avg_reward = acc.gather_for_metrics(avg_reward).mean()
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('configs_2dTraj_118.json'))
+    cfg = json.load(open('configs_2dTraj_3090.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)

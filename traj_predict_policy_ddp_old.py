@@ -1,8 +1,7 @@
 import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import sys
 import torch,clip
 import torch.nn as nn
@@ -21,7 +20,6 @@ from accelerate.utils import DistributedDataParallelKwargs, InitProcessGroupKwar
 from datetime import timedelta
 from transformers import get_scheduler
 import wandb
-from traj_predict.traj_func import PreProcess
 os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
 def contains_words(inst, include_words=[], exclude_words=[]):
@@ -33,18 +31,14 @@ def contains_words(inst, include_words=[], exclude_words=[]):
             return False
     return True
 def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
-    save_path = os.path.join(save_dir, f'ddp_task_ABC_D_best_checkpoint_118.pth')
-    
-    # 要排除的模块列表
-    modules_to_exclude = ['model_mae', 'model_clip']
-    # 获取模型的 state_dict
-    state_dict = {k: v for k, v in model.state_dict().items() if not any(module_name in k for module_name in modules_to_exclude)}
-    # 保存状态
+    save_path = os.path.join(save_dir, f'ddp_task_ABC_D_best_checkpoint.pth')
+    # 获取未冻结的参数
+    # model_state_dict = {k: v for k, v in model.state_dict().items() if v.requires_grad}
     torch.save({
         'epoch': epoch,
-        'model_state_dict': state_dict,
-        # 'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss 
+        'model_state_dict':model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss
     }, save_path)
 def normalize_data(data, stats={'min': 0,'max': 224}):
     # nomalize to [0,1]
@@ -56,7 +50,39 @@ def unnormalize_data(ndata, stats={'min': 0,'max': 224}):
     ndata = (ndata + 1) / 2 # [-1, 1] -> [0, 1] 域
     data = ndata * (stats['max'] - stats['min']) + stats['min']
     return data
-
+class PreProcess(): 
+    def __init__(
+            self,
+            rgb_shape, 
+            rgb_mean, 
+            rgb_std, 
+            crop_area_scale,
+            crop_aspect_ratio,
+            device,
+        ):
+        self.train_transforms = RandomResizedCrop(rgb_shape, crop_area_scale, crop_aspect_ratio, interpolation=Image.BICUBIC, antialias=True).to(device)
+        self.test_transforms = Resize(rgb_shape, interpolation=Image.BICUBIC, antialias=True).to(device)
+        self.rgb_mean = torch.tensor(rgb_mean, device=device).view(1, 1, -1, 1, 1)
+        self.rgb_std = torch.tensor(rgb_std, device=device).view(1, 1, -1, 1, 1)
+    
+    def rgb_process(self, rgb_static, train=False):
+        batch_size = rgb_static.shape[0]
+        original_shape = rgb_static.shape[-2:]  # (height, width) 
+        rgb_static = rgb_static.float()*(1/255.)
+        crop_boxes = []
+        for idx in range(batch_size):
+            if train:
+                i, j, h, w = self.train_transforms.get_params(rgb_static[idx], self.train_transforms.scale, self.train_transforms.ratio)
+                crop_boxes.append([j, i, w, h])
+                rgb_static_reshape = self.train_transforms(rgb_static)  
+            else:
+                rgb_static_reshape = self.test_transforms(rgb_static)
+                crop_boxes.append([0, 0, original_shape[1], original_shape[0]])
+        crop_boxes = torch.tensor(crop_boxes).unsqueeze(1)
+        # torchvision Normalize forces sync between CPU and GPU, so we use our own
+        rgb_static_norm = (rgb_static_reshape - self.rgb_mean) / (self.rgb_std + 1e-6)
+        return rgb_static_norm,rgb_static_reshape,crop_boxes
+    
     
 def transform_points(points, crop_box, transformed_image):
     transformed_points = []
@@ -154,12 +180,11 @@ if __name__ == '__main__':
     acc = Accelerator(
         kwargs_handlers=[ddp_kwargs]
     )
-    wandb_model = True
+    wandb_model = False
     if wandb_model and acc.is_main_process:
-        wandb.init(project='robotic traj diffusion task_ABC_D arguement', group='robotic traj diffusion', name='DDP traj diffusion_ABC_D_0806')
+        wandb.init(project='robotic traj diffusion task_ABC_D arguement', group='robotic traj diffusion', name='DDP traj diffusion_ABC_D_0729')
     device = acc.device
     # config prepare
-    epoch_num = 20
     batch_size = 64
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
@@ -167,14 +192,13 @@ if __name__ == '__main__':
     lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
-        rgb_static_pad = 0,
-        rgb_gripper_pad = 4,
-        rgb_shape = [224,224], 
+        rgb_shape = [224,224],
         rgb_mean = [0.485, 0.456, 0.406],
         rgb_std =  [0.229, 0.224, 0.225],
+        crop_area_scale = [0.9, 1.0],
+        crop_aspect_ratio =[1.0, 1.0],
         device = device
     )
-
     # data loader
     train_dataset = LMDBDataset(
         lmdb_dir = lmdb_dir, 
@@ -234,12 +258,12 @@ if __name__ == '__main__':
         # our network predicts noise (instead of denoised action)
         prediction_type='epsilon'
     )
-
+    # training config
+    epoch_num = 100
 
     optimizer = torch.optim.AdamW(
             params=model.parameters(),
             lr=1e-4, weight_decay=1e-6)
-
     model, optimizer, train_loader, val_loader = acc.prepare(
         model, 
         optimizer, 
@@ -252,7 +276,7 @@ if __name__ == '__main__':
     lr_scheduler = get_scheduler(
             name='cosine',
             optimizer=optimizer,
-            num_warmup_steps=1,
+            num_warmup_steps=5,
             num_training_steps=len(train_loader) * epoch_num
         )
 
@@ -272,25 +296,26 @@ if __name__ == '__main__':
                 image = batch['rgb_static']
                 naction = batch['actions']
                 
-                rgb_static_norm,rgb_gripper_norm,naction_transformed = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions'],train=True)    
+                rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=True)     
+                naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)  # diffusion label 
                 naction_trans_norm = normalize_data(naction_transformed)
                 # visualization croped image
                 # Convert tensor to NumPy array for visualization
-                # import cv2
-                # for batch_idx in range(image.shape[0]):
-                #     for seq_idx in range(image.shape[1]):
-                #         rgb_static_rgb = cv2.cvtColor(image[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                #         for point_2d in naction[batch_idx,seq_idx,:,:]:
-                #             cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                #         cv2.imshow('Ori RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
-                        
-                #         rgb_static_reshape = preprocessor.rgb_recovery(rgb_static_norm)
-                #         rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                import cv2
+                for batch_idx in range(image.shape[0]):
+                    for seq_idx in range(image.shape[1]):
+                        rgb_static_rgb = cv2.cvtColor(image[batch_idx][seq_idx].permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                        for point_2d in naction[batch_idx,seq_idx,:,:]:
+                            cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                        cv2.imshow('Ori RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
 
-                #         for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
-                #             cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                #         cv2.imshow("Cropped Image", rgb_static_np)
-                #         cv2.waitKey(0)
+                        rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+
+                        for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
+                            cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                        rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
+                        cv2.imshow("Cropped Image", rgb_static_np)
+                        cv2.waitKey(0)
                 timesteps = torch.randint(
                     0, noise_scheduler.config.num_train_timesteps,
                     (naction_trans_norm.shape[0],), device=device).long()
@@ -303,7 +328,6 @@ if __name__ == '__main__':
                 # loss = nn.functional.mse_loss(noise_pred, noise.squeeze(1)) 原始loss
                 mask = batch['mask'].unsqueeze(-1).expand_as(noise_pred) # 先广播到同样大小
                 masked_loss = nn.functional.mse_loss(noise_pred * mask, noise.squeeze(1) * mask, reduction='none')
-                
                 # 计算有效掩码的总和
                 mask_sum = mask.sum()
                 if mask_sum > 0:
@@ -366,7 +390,9 @@ if __name__ == '__main__':
                         image = batch['rgb_static']
                         naction = batch['actions']
                         # example inputs
-                        rgb_static_norm,rgb_gripper_norm,naction_transformed = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions'],train=False)    
+                        
+                        rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=False)  
+                        naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)   # diffusion label    
                         naction_trans_norm = normalize_data(naction_transformed)
                         noisy_action = torch.randn(naction.shape, device=device)
                         batch_val_size,sequence,chunk_size,dim = noisy_action.shape

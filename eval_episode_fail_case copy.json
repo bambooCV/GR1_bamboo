@@ -1,5 +1,105 @@
 [  
     {
+        "sequence_number": 25,
+        "state": {
+            "led": 1,
+            "lightbulb": 1,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "table",
+            "blue_block": "slider_left",
+            "pink_block": "slider_right",
+            "grasped": 0
+        },
+        "result": [
+            "lift_blue_block_slider",
+            "stack_block",
+            "turn_off_led",
+            "unstack_block",
+            "push_blue_block_left"
+        ]
+    },
+    {
+        "sequence_number": 25,
+        "state": {
+            "led": 1,
+            "lightbulb": 1,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "table",
+            "blue_block": "slider_left",
+            "pink_block": "slider_right",
+            "grasped": 0
+        },
+        "result": [
+            "lift_blue_block_slider",
+            "stack_block",
+            "turn_off_led",
+            "unstack_block",
+            "push_blue_block_left"
+        ]
+    },
+    {
+        "sequence_number": 25,
+        "state": {
+            "led": 1,
+            "lightbulb": 1,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "table",
+            "blue_block": "slider_left",
+            "pink_block": "slider_right",
+            "grasped": 0
+        },
+        "result": [
+            "lift_blue_block_slider",
+            "stack_block",
+            "turn_off_led",
+            "unstack_block",
+            "push_blue_block_left"
+        ]
+    },
+    {
+        "sequence_number": 25,
+        "state": {
+            "led": 1,
+            "lightbulb": 1,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "table",
+            "blue_block": "slider_left",
+            "pink_block": "slider_right",
+            "grasped": 0
+        },
+        "result": [
+            "lift_blue_block_slider",
+            "stack_block",
+            "turn_off_led",
+            "unstack_block",
+            "push_blue_block_left"
+        ]
+    },
+    {
+        "sequence_number": 25,
+        "state": {
+            "led": 1,
+            "lightbulb": 1,
+            "slider": "right",
+            "drawer": "closed",
+            "red_block": "table",
+            "blue_block": "slider_left",
+            "pink_block": "slider_right",
+            "grasped": 0
+        },
+        "result": [
+            "lift_blue_block_slider",
+            "stack_block",
+            "turn_off_led",
+            "unstack_block",
+            "push_blue_block_left"
+        ]
+    },
+    {
         "sequence_number": 207,
         "state": {
             "led": 0,

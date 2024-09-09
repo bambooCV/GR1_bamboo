@@ -112,6 +112,7 @@ class LMDBDataset(Dataset):
         traj_2d_preds =self.dummy_traj_2d_preds.clone()
 
         cur_episode = loads(self.txn.get(f'cur_episode_{idx}'.encode()))
+        inst = loads(self.txn.get(f'inst_{cur_episode}'.encode()))
         inst_token = loads(self.txn.get(f'inst_token_{cur_episode}'.encode()))
         for i in range(self.sequence_length):
             if loads(self.txn.get(f'cur_episode_{idx+i}'.encode())) == cur_episode:
@@ -133,7 +134,19 @@ class LMDBDataset(Dataset):
                 traj_2d_preds[i,traj_2d_preds_len:] = traj_2d_preds[i,traj_2d_preds_len-1] # 补齐长度
                 future_2d_actions = loads(self.txn.get(f'traj_2d_init_{cur_episode}'.encode())) # 只用当前episode的2d action 为了和inference保持一致 且快速验证
                 actions_2d[i] = resample_sequence(future_2d_actions[:,:2], 30)
-                
+                # visualization 轨迹
+
+
+                # import cv2
+                # rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
+                # for point_2d in traj_2d_preds[i,:10]:
+                #     cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 255, 255), thickness=-1)
+
+                # # 把inst的文字放在图片左下角 放在左下角！
+                # cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                # cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
+                # cv2.waitKey(0)
+
         return {
             'rgb_static': rgb_static,
             'rgb_gripper': rgb_gripper,

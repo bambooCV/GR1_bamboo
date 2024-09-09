@@ -69,6 +69,25 @@ def shifts_2d_action_to_Aug(action_2d, shift, pad, w, h):
     # 获取张量的形状
     b, seq, t, dim = action_2d.shape
 
+    norm_x_o = action_2d[..., 0] + pad
+    norm_y_o = action_2d[..., 1] + pad
+    shift_o = shift * (w + 2*pad) / 2
+    # 获取shift值
+    shift_x = shift_o[..., 0] 
+    shift_y = shift_o[..., 1]
+
+    # 计算新图像中对应的标准化坐标
+    new_norm_x_o = norm_x_o - shift_x 
+    new_norm_y_o = norm_y_o - shift_y
+
+    # 合并新的坐标
+    augmented_action_2d = torch.stack([new_norm_x_o, new_norm_y_o], dim=-1)
+
+    return augmented_action_2d
+def shifts_2d_action_to_Aug_bak(action_2d, shift, pad, w, h):
+    # 获取张量的形状
+    b, seq, t, dim = action_2d.shape
+
     # 将原图padding后像坐标标准化 [-1, 1]
     # norm_x_o = ((action_2d[..., 0] + pad) / (w + 2 * pad - 1)) * 2 - 1
     # norm_y_o = ((action_2d[..., 1] + pad) / (h + 2 * pad - 1)) * 2 - 1
@@ -91,8 +110,7 @@ def shifts_2d_action_to_Aug(action_2d, shift, pad, w, h):
     # 合并新的坐标
     augmented_action_2d = torch.stack([new_point_2d_x, new_point_2d_y], dim=-1)
 
-    return augmented_action_2d
-    
+    return augmented_action_2d    
 class PreProcess(): 
     def __init__(
             self,
@@ -116,9 +134,11 @@ class PreProcess():
         if train:
             rgb_static,shift = RandomShiftsAug(rgb_static, self.rgb_static_pad)
             new_action_2d = shifts_2d_action_to_Aug(action_2d, shift,self.rgb_static_pad,rgb_static.shape[-1],rgb_static.shape[-2])
+            # 保护防止2d点越界
+            new_action_2d = torch.clamp(new_action_2d, 0, 200)
             rgb_gripper,_ = RandomShiftsAug(rgb_gripper, self.rgb_gripper_pad)
         else:
-            new_action_2d = action_2d
+            new_action_2d = action_2d.clone()
         new_action_2d = resize_points(new_action_2d, (200,200), (224,224))
         rgb_static = self.resize(rgb_static)
         rgb_gripper = self.resize(rgb_gripper)
@@ -143,7 +163,12 @@ class PreProcess():
         rgb_static = (rgb_static - self.rgb_mean) / (self.rgb_std + 1e-6)
         rgb_gripper = (rgb_gripper - self.rgb_mean) / (self.rgb_std + 1e-6)
         return rgb_static, rgb_gripper,new_action_2d
-
+    
+    def rgb_recovery(self, rgb_static):
+        rgb_static = (rgb_static * (self.rgb_std + 1e-6)) + self.rgb_mean
+        rgb_static = rgb_static.clamp(0, 1)
+        rgb_static = (rgb_static*255.).byte()
+        return rgb_static
     
 def transform_points(points, crop_box, transformed_image):
     transformed_points = []

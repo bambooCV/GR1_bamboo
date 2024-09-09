@@ -186,21 +186,33 @@ class GR1(nn.Module):
         self.embed_ln = nn.LayerNorm(hidden_size)
 
         # Action query token
-        self.action_queries = nn.Embedding(1, hidden_size) # arm + gripper, weight from bytedance
-        self.action_chunk_queries = nn.Embedding(chunk_size, hidden_size) 
-        self.action_chunk_queries.weight.data.fill_(0) # finetune it from zero weight
+        # self.action_queries = nn.Embedding(1, hidden_size) # arm + gripper, weight from bytedance
+        # self.action_chunk_queries = nn.Embedding(chunk_size, hidden_size) 
+        # self.action_chunk_queries.weight.data.fill_(0) # finetune it from zero weight
 
+
+        self.action_xy_queries = nn.Embedding(1, hidden_size)  # action query token for x,y
+        self.action_xy_queries.weight.data.fill_(0) # finetune it from zero weight
+        self.action_zxyz_queries = nn.Embedding(1, hidden_size) # action query token for z, rx,ry,rz
+        self.action_zxyz_queries.weight.data.fill_(0) # finetune it from zero weight
         
         # Observation query token
         self.obs_queries = nn.Embedding(self.n_patch_latents + 1, self.hidden_size)
         self.obs_hand_queries = nn.Embedding(self.n_patch_latents + 1, self.hidden_size)
 
         # Action prediction
-        self.pred_act_mlps = nn.ModuleList([
+        self.pred_act_xy_mlps = nn.ModuleList([
             nn.Linear(hidden_size, hidden_size//2),
             nn.Linear(hidden_size//2, hidden_size//2)])
-        self.pred_arm_act = nn.Linear(hidden_size//2, self.act_dim-1) # arm action
-        self.pred_gripper_act = nn.Linear(hidden_size//2, 1) # gripper action (binary)
+        self.pred_arm_xy_act = nn.Linear(hidden_size//2, 2) # x,y action
+
+        
+        self.pred_act_zxyz_mlps = nn.ModuleList([
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.Linear(hidden_size//2, hidden_size//2)])
+        self.pred_arm_zxyz_act = nn.Linear(hidden_size//2, 4) # z,rx,ry,rz action
+        self.pred_gripper_act_mlp =  nn.Linear(hidden_size, hidden_size//2)
+        self.pred_gripper_act = nn.Linear(hidden_size//2, 1) # gripper state
 
 
         
@@ -374,11 +386,15 @@ class GR1(nn.Module):
             action_2d_queries = self.action_2d_queries.weight  # (1, h)
             action_2d_queries = action_2d_queries.view(1, 1, self.pred_2d_points_num, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, pred_2d_points_num, h)
             stacked_inputs = torch.cat((stacked_inputs, action_2d_queries), dim=2)  # (b, t, n_tokens, h)
+            
         if self.act_pred:
-            action_queries = self.action_queries.weight  # (1, h)
-            action_chunk_queries = self.action_chunk_queries.weight + action_queries # (chunk_size, h)
-            action_chunk_queries = action_chunk_queries.view(1, 1, self.chunk_size, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, chunk_size, h)
-            stacked_inputs = torch.cat((stacked_inputs, action_chunk_queries), dim=2)  # (b, t, n_tokens, h)
+            action_xy_queries = self.action_xy_queries.weight  # (1, h)
+            action_xy_queries = action_xy_queries.view(1, 1, self.chunk_size, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, chunk_size, h)
+            stacked_inputs = torch.cat((stacked_inputs, action_xy_queries), dim=2)  # (b, t, n_tokens, h)
+            action_zxyz_queries = self.action_zxyz_queries.weight  # (1, h)
+            action_zxyz_queries = action_zxyz_queries.view(1, 1, self.chunk_size, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, chunk_size, h)
+            stacked_inputs = torch.cat((stacked_inputs, action_zxyz_queries), dim=2)  # (b, t, n_tokens, h)
+            
         if self.fwd_pred:
             obs_queries = self.obs_queries.weight  # (n_patch_latents + 1, h)
             obs_queries = obs_queries.view(1, 1, self.n_patch_latents + 1, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, n_patch_latents + 1, h)
@@ -413,10 +429,14 @@ class GR1(nn.Module):
             n_act_2d_pred_tokens = self.pred_2d_points_num
             act_2d_query_token_start_i = n_tokens
             n_tokens += n_act_2d_pred_tokens
-        n_act_pred_tokens = self.chunk_size
+
         if self.act_pred:
-            act_query_token_start_i = n_tokens
-            n_tokens += n_act_pred_tokens
+            n_act_pred_xy_tokens = self.chunk_size
+            act_query_xy_token_start_i = n_tokens
+            n_tokens += n_act_pred_xy_tokens
+            n_act_pred_zxyz_tokens = self.chunk_size
+            act_query_zxyz_token_start_i = n_tokens
+            n_tokens += n_act_pred_zxyz_tokens
         if self.fwd_pred:
             obs_query_token_start_i = n_tokens
             n_tokens += (n_patch_tokens + n_obs_tokens)
@@ -445,8 +465,10 @@ class GR1(nn.Module):
             act_2d_query_attention_mask = torch.zeros((batch_size, sequence_length, n_act_2d_pred_tokens), dtype=torch.long, device=stacked_inputs.device)
             stacked_attention_mask = torch.cat((stacked_attention_mask, act_2d_query_attention_mask), dim=2)
         if self.act_pred:
-            act_query_attention_mask = torch.zeros((batch_size, sequence_length, n_act_pred_tokens), dtype=torch.long, device=stacked_inputs.device)
-            stacked_attention_mask = torch.cat((stacked_attention_mask, act_query_attention_mask), dim=2)
+            act_query_xy_attention_mask = torch.zeros((batch_size, sequence_length, n_act_pred_xy_tokens), dtype=torch.long, device=stacked_inputs.device)
+            stacked_attention_mask = torch.cat((stacked_attention_mask, act_query_xy_attention_mask), dim=2)
+            act_query_zxyz_attention_mask = torch.zeros((batch_size, sequence_length, n_act_pred_zxyz_tokens), dtype=torch.long, device=stacked_inputs.device)
+            stacked_attention_mask = torch.cat((stacked_attention_mask, act_query_zxyz_attention_mask), dim=2)
         if self.fwd_pred:
             obs_query_attention_mask = torch.zeros((batch_size, sequence_length, n_patch_tokens + n_obs_tokens), dtype=torch.long, device=stacked_inputs.device)
             stacked_attention_mask = torch.cat((stacked_attention_mask, obs_query_attention_mask), dim=2)
@@ -473,11 +495,23 @@ class GR1(nn.Module):
 
         # Action prediction
         if self.act_pred:
-            action_embedding = x[:, :, act_query_token_start_i:(act_query_token_start_i+self.chunk_size)]
-            for pred_act_mlp in self.pred_act_mlps:
-                action_embedding = pred_act_mlp(action_embedding)
-            arm_action_preds = self.pred_arm_act(action_embedding)  # (b, t, chunk_size, act_dim - 1)
-            gripper_action_preds = self.pred_gripper_act(action_embedding)  # (b, t, chunk_size, 1)
+            action_xy_embedding = x[:, :, act_query_xy_token_start_i:(act_query_xy_token_start_i+self.chunk_size)]
+            for pred_act_xy_mlp in self.pred_act_xy_mlps:
+                action_xy_embedding = pred_act_xy_mlp(action_xy_embedding)
+            arm_action_xy_preds = self.pred_arm_xy_act(action_xy_embedding)  # (b, t, chunk_size, 2)
+
+            
+            action_zxyz_embedding = x[:, :, act_query_zxyz_token_start_i:(act_query_zxyz_token_start_i+self.chunk_size)]
+            for pred_act_zxyz_mlp in self.pred_act_zxyz_mlps:
+                action_zxyz_embedding = pred_act_zxyz_mlp(action_zxyz_embedding)
+            arm_action_zxyz_preds = self.pred_arm_zxyz_act(action_zxyz_embedding)  # (b, t, chunk_size, 4)
+
+            # x,y,z,rx,ry,rz
+            arm_action_preds = torch.cat((arm_action_xy_preds, arm_action_zxyz_preds), dim=-1)
+            # gripper
+            gripper_action_embedding = torch.cat((action_xy_embedding, action_zxyz_embedding), dim=-1)
+            gripper_action_embedding = self.pred_gripper_act_mlp(gripper_action_embedding)
+            gripper_action_preds = self.pred_gripper_act(gripper_action_embedding)  # (b, t, chunk_size, 1)
         # Forward prediction vision decoder
         if self.fwd_pred:
             mask_token = self.mask_token  # (1, 1, 1, h)

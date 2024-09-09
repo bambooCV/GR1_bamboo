@@ -17,6 +17,7 @@ from transformers import get_scheduler
 import wandb
 from time import time
 import matplotlib.pyplot as plt
+from traj_predict.traj_func import PreProcess
 os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
 
@@ -30,40 +31,8 @@ def unnormalize_data(ndata, stats={'min': 0,'max': 224}):
     ndata = (ndata + 1) / 2 # [-1, 1] -> [0, 1] 域
     data = ndata * (stats['max'] - stats['min']) + stats['min']
     return data
-class PreProcess(): 
-    def __init__(
-            self,
-            rgb_shape, 
-            rgb_mean, 
-            rgb_std, 
-            crop_area_scale,
-            crop_aspect_ratio,
-            device,
-        ):
-        self.train_transforms = RandomResizedCrop(rgb_shape, crop_area_scale, crop_aspect_ratio, interpolation=Image.BICUBIC, antialias=True).to(device)
-        self.test_transforms = Resize(rgb_shape, interpolation=Image.BICUBIC, antialias=True).to(device)
-        self.rgb_mean = torch.tensor(rgb_mean, device=device).view(1, 1, -1, 1, 1)
-        self.rgb_std = torch.tensor(rgb_std, device=device).view(1, 1, -1, 1, 1)
-    
-    def rgb_process(self, rgb_static, train=False):
-        batch_size = rgb_static.shape[0]
-        original_shape = rgb_static.shape[-2:]  # (height, width) 
-        rgb_static = rgb_static.float()*(1/255.)
-        crop_boxes = []
-        for idx in range(batch_size):
-            if train:
-                i, j, h, w = self.train_transforms.get_params(rgb_static[idx], self.train_transforms.scale, self.train_transforms.ratio)
-                crop_boxes.append([j, i, w, h])
-                rgb_static_reshape = self.train_transforms(rgb_static)  
-            else:
-                rgb_static_reshape = self.test_transforms(rgb_static)
-                crop_boxes.append([0, 0, original_shape[1], original_shape[0]])
-        crop_boxes = torch.tensor(crop_boxes).unsqueeze(1)
-        # torchvision Normalize forces sync between CPU and GPU, so we use our own
-        rgb_static_norm = (rgb_static_reshape - self.rgb_mean) / (self.rgb_std + 1e-6)
-        return rgb_static_norm,rgb_static_reshape,crop_boxes
-    
-    
+
+
 def transform_points(points, crop_box, transformed_image):
     transformed_points = []
     for batch_idx in range(points.shape[0]):
@@ -155,18 +124,18 @@ if __name__ == '__main__':
         wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_0626normaction')
     # config prepare
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 1
+    batch_size = 64
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
     lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
-        rgb_shape = [224,224],
+        rgb_static_pad = 20,
+        rgb_gripper_pad = 4,
+        rgb_shape = [224,224], 
         rgb_mean = [0.485, 0.456, 0.406],
         rgb_std =  [0.229, 0.224, 0.225],
-        crop_area_scale = [0.9, 1.0],
-        crop_aspect_ratio =[1.0, 1.0],
         device = device
     )
     # data loader
@@ -209,8 +178,10 @@ if __name__ == '__main__':
              
     model = TrajPredictPolicy()
     # 预训练模型读入
-    # model_path = "Save/diffusion_2D_trajectory/ddp_task_ABC_D_best_checkpoint_epoch72.pth"
-    model_path = "Save/ddp_task_ABC_D_best_checkpoint_24.pth"
+    model_path = "Save/ddp_task_ABC_D_best_checkpoint_118.pth"
+    # model_path = "Save/diffusion_2D_trajectory/update4_with_pad10/ddp_task_ABC_D_best_checkpoint_103_e85.pth"
+    # model_path = "Save/diffusion_2D_trajectory/update_with_bulb/ddp_task_ABC_D_best_checkpoint_85.pth"
+    # model_path = "Save/diffusion_2D_trajectory/update3_with_pad20_bulb_fail/ddp_task_ABC_D_best_checkpoint_103_e77.pth"
     state_dict = torch.load(model_path,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict.items():
@@ -218,9 +189,9 @@ if __name__ == '__main__':
         new_state_dict[new_key] = value
         multi_gpu = True
     if multi_gpu:
-        model.load_state_dict(new_state_dict)
+        model.load_state_dict(new_state_dict,strict=False)
     else:
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict,strict=False)
     model = model.to(device)
     
     # policy config
@@ -246,11 +217,20 @@ if __name__ == '__main__':
                 batch, load_time = val_prefetcher.next()
                 val_index = 0
                 # 算 light bulb
-                while batch is not None: # and val_index < 20:
+                while batch is not None and val_index < 20:
                     eval_flag = False
+                    
+                    colors = ["pink", "blue", "red"]
+                    directions = ["right", "left"]
+                    exclude_words = ["rotate","turn"]
+                    include_conditions = [(color, direction) for color in colors for direction in directions]
+
                     for inst in batch['inst']:
-                        if "lightbulb" in inst or "light bulb" in inst:
+                        # if "sliding door" in inst:
+                        # if "lightbulb" in inst or "light bulb" in inst:
                         # if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions):
+                        if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions) or \
+                           "lightbulb" in inst or "light bulb" in inst :
                             eval_flag = True
 
                     if eval_flag:
@@ -260,8 +240,7 @@ if __name__ == '__main__':
                         image = batch['rgb_static']
                         naction = batch['actions']
                         # example inputs
-                        rgb_static_norm,rgb_static_reshape,crop_boxes = preprocessor.rgb_process(batch['rgb_static'], train=False)  
-                        naction_transformed = transform_points(naction, crop_boxes, rgb_static_reshape).to(device).to(torch.float32)   # diffusion label    
+                        rgb_static_norm,rgb_gripper_norm,naction_transformed = preprocessor.rgb_process(batch['rgb_static'], batch["rgb_gripper"],batch['actions'],train=False)    
                         naction_trans_norm = normalize_data(naction_transformed)
                         noisy_action = torch.randn(naction.shape, device=device)
                         batch_val_size,sequence,chunk_size,dim = noisy_action.shape
@@ -305,27 +284,31 @@ if __name__ == '__main__':
                         # ################Convert tensor to NumPy array for visualization
                         re_out_action = re_out_action.unsqueeze(1)
                         import cv2
+                        rgb_static_reshape = preprocessor.rgb_recovery(rgb_static_norm)
                         for batch_idx in range(image.shape[0]):
                             for seq_idx in range(image.shape[1]):
-
+                                rgb_static = cv2.cvtColor( batch['rgb_static'][batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
+                                for point_2d in batch['actions'][batch_idx,seq_idx,:,:]:
+                                    cv2.circle(rgb_static, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                                cv2.putText(rgb_static, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                                cv2.imshow("Ori Image", rgb_static)
+                                
                                 rgb_static_np = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                                # for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
-                                #     cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                                rgb_static_np = (rgb_static_np * 255).astype(np.uint8)
-                                # cv2.putText(rgb_static_np, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                                cv2.imshow("Ori Cropped I mage", rgb_static_np)
+                                for point_2d in naction_transformed[batch_idx,seq_idx,:,:]:
+                                    cv2.circle(rgb_static_np, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                                cv2.putText(rgb_static_np, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                                cv2.imshow("Ori Reshape Image", rgb_static_np)
                                 
                                 rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
                                 for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
                                     cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                                rgb_static_np2 = (rgb_static_np2 * 255).astype(np.uint8)
+                                
                                 cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                                cv2.imshow("Pred Cropped I mage", rgb_static_np2)
-                                
-                                
+                                cv2.imshow("Pred Image", rgb_static_np2)           
                                 cv2.waitKey(0)
+                        val_index = val_index + 1
                     batch, load_time = val_prefetcher.next()
-                    val_index = val_index + 1
+
                     pbar.update(1)
             avg_val_loss = val_total_loss/val_index
             print(f"avg_val_loss: {avg_val_loss}")

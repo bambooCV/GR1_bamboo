@@ -370,15 +370,15 @@ class GR1(nn.Module):
                 (stacked_inputs,
                  hand_patch_embeddings, 
                  hand_obs_embeddings), dim=2)  # (b, t, n_tokens, h)
-        if self.act_2d_pred:
-            action_2d_queries = self.action_2d_queries.weight  # (1, h)
-            action_2d_queries = action_2d_queries.view(1, 1, self.pred_2d_points_num, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, pred_2d_points_num, h)
-            stacked_inputs = torch.cat((stacked_inputs, action_2d_queries), dim=2)  # (b, t, n_tokens, h)
         if self.act_pred:
             action_queries = self.action_queries.weight  # (1, h)
             action_chunk_queries = self.action_chunk_queries.weight + action_queries # (chunk_size, h)
             action_chunk_queries = action_chunk_queries.view(1, 1, self.chunk_size, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, chunk_size, h)
             stacked_inputs = torch.cat((stacked_inputs, action_chunk_queries), dim=2)  # (b, t, n_tokens, h)
+        if self.act_2d_pred:
+            action_2d_queries = self.action_2d_queries.weight  # (1, h)
+            action_2d_queries = action_2d_queries.view(1, 1, self.pred_2d_points_num, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, pred_2d_points_num, h)
+            stacked_inputs = torch.cat((stacked_inputs, action_2d_queries), dim=2)  # (b, t, n_tokens, h)
         if self.fwd_pred:
             obs_queries = self.obs_queries.weight  # (n_patch_latents + 1, h)
             obs_queries = obs_queries.view(1, 1, self.n_patch_latents + 1, self.hidden_size).repeat(batch_size, sequence_length, 1, 1)  # (b, t, n_patch_latents + 1, h)
@@ -409,14 +409,18 @@ class GR1(nn.Module):
             n_tokens += n_hand_patch_tokens
             
         # 汇总所有生成的token OUTPUT 并标记每个输出token的起始位置
+
+
+        if self.act_pred:
+            n_act_pred_tokens = self.chunk_size
+            act_query_token_start_i = n_tokens
+            n_tokens += n_act_pred_tokens
+        
         if self.act_2d_pred:
             n_act_2d_pred_tokens = self.pred_2d_points_num
             act_2d_query_token_start_i = n_tokens
             n_tokens += n_act_2d_pred_tokens
-        n_act_pred_tokens = self.chunk_size
-        if self.act_pred:
-            act_query_token_start_i = n_tokens
-            n_tokens += n_act_pred_tokens
+        
         if self.fwd_pred:
             obs_query_token_start_i = n_tokens
             n_tokens += (n_patch_tokens + n_obs_tokens)
@@ -441,12 +445,15 @@ class GR1(nn.Module):
                 1, 1, unmasked_tokens)
         
         # 需要mask的
-        if self.act_2d_pred:
-            act_2d_query_attention_mask = torch.zeros((batch_size, sequence_length, n_act_2d_pred_tokens), dtype=torch.long, device=stacked_inputs.device)
-            stacked_attention_mask = torch.cat((stacked_attention_mask, act_2d_query_attention_mask), dim=2)
+
         if self.act_pred:
             act_query_attention_mask = torch.zeros((batch_size, sequence_length, n_act_pred_tokens), dtype=torch.long, device=stacked_inputs.device)
             stacked_attention_mask = torch.cat((stacked_attention_mask, act_query_attention_mask), dim=2)
+        
+        if self.act_2d_pred:
+            act_2d_query_attention_mask = torch.zeros((batch_size, sequence_length, n_act_2d_pred_tokens), dtype=torch.long, device=stacked_inputs.device)
+            stacked_attention_mask = torch.cat((stacked_attention_mask, act_2d_query_attention_mask), dim=2)
+        
         if self.fwd_pred:
             obs_query_attention_mask = torch.zeros((batch_size, sequence_length, n_patch_tokens + n_obs_tokens), dtype=torch.long, device=stacked_inputs.device)
             stacked_attention_mask = torch.cat((stacked_attention_mask, obs_query_attention_mask), dim=2)
@@ -464,13 +471,6 @@ class GR1(nn.Module):
         x = transformer_outputs['last_hidden_state']
         x = x.reshape(batch_size, sequence_length, n_tokens, self.hidden_size)
 
-        # 2d action prediction
-        if self.act_2d_pred:
-            action_2d_embedding = x[:, :, act_2d_query_token_start_i:(act_2d_query_token_start_i+self.pred_2d_points_num)]
-            for pred_act_2d_mlp in self.pred_act_2d_mlps:
-                action_2d_embedding = pred_act_2d_mlp(action_2d_embedding)
-            traj_2d_preds = self.pred_2d_points(action_2d_embedding)
-
         # Action prediction
         if self.act_pred:
             action_embedding = x[:, :, act_query_token_start_i:(act_query_token_start_i+self.chunk_size)]
@@ -478,7 +478,15 @@ class GR1(nn.Module):
                 action_embedding = pred_act_mlp(action_embedding)
             arm_action_preds = self.pred_arm_act(action_embedding)  # (b, t, chunk_size, act_dim - 1)
             gripper_action_preds = self.pred_gripper_act(action_embedding)  # (b, t, chunk_size, 1)
+        
+        # 2d action prediction
+        if self.act_2d_pred:
+            action_2d_embedding = x[:, :, act_2d_query_token_start_i:(act_2d_query_token_start_i+self.pred_2d_points_num)]
+            for pred_act_2d_mlp in self.pred_act_2d_mlps:
+                action_2d_embedding = pred_act_2d_mlp(action_2d_embedding)
+            traj_2d_preds = self.pred_2d_points(action_2d_embedding)
         # Forward prediction vision decoder
+        
         if self.fwd_pred:
             mask_token = self.mask_token  # (1, 1, 1, h)
             mask_tokens = mask_token.repeat(batch_size, sequence_length, (self.image_size//self.patch_size)**2, 1)  # (b, l, n_patches, h)

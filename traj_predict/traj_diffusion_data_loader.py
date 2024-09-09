@@ -132,8 +132,13 @@ class LMDBDataset(Dataset):
                 arm_state[i, :6] = robot_obs[:6]
                 gripper_state[i, ((robot_obs[-1] + 1) / 2).long()] = 1
                 future_2d_actions = loads(self.txn.get(f'traj_2d_{new_idx}'.encode()))
- 
-
+                if len(future_2d_actions) < self.chunk_size/3:
+                    if future_2d_actions[:, 0].max() - future_2d_actions[:, 0].min() < 10 and future_2d_actions[:, 1].max() - future_2d_actions[:, 1].min() < 10:
+                        mask[i] = 0
+                else:
+                    if future_2d_actions[:, 0].max() - future_2d_actions[:, 0].min() < 6 and future_2d_actions[:, 1].max() - future_2d_actions[:, 1].min() < 6:
+                        mask[i] = 0
+                        # print("mask")
                 actions[i,:,:] = resample_sequence(future_2d_actions[:,:2], self.chunk_size)
                 # 图像增强 针对light bulb 做特殊处理
                 if "lightbulb" in inst or "light bulb" in inst:
@@ -141,28 +146,40 @@ class LMDBDataset(Dataset):
                     # if random.random() > 0.33: # 更多的图像flipping
                         rgb_static[i] = transforms.functional.hflip(rgb_static[i])
                         actions[i][:,0] = rgb_static[i].shape[-1] - actions[i][:,0]
-                # visualization 轨迹
-                # colors = ["pink", "blue", "red"]
-                # directions = ["right", "left"]
-                # exclude_words = ["rotate","turn"]
-                # include_conditions = [(color, direction) for color in colors for direction in directions]
-                # if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions):
-                #     if "left" in inst:
-                #         self.left_num += 1
-                #     elif "right" in inst:
-                #         self.right_num += 1
-                #     import cv2
-                #     rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
-                #     for point_2d in future_2d_actions[:,:2]:
-                #         cv2.circle(rgb_static_rgb, tuple(point_2d.tolist()), radius=3, color=(0, 255, 255), thickness=-1)
-                #     for point_2d in actions[i,:,:]:
-                #         cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                #     # 把inst的文字放在图片左下角 放在左下角！
-                    
-                #     cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
-                #     cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
-                #     # cv2.waitKey(0)
-                #     print(f"left num: {self.left_num}, right num: {self.right_num}")
+
+                colors = ["pink", "blue", "red"]
+                directions = ["right", "left"]
+                exclude_words = ["rotate","turn"]
+                include_conditions = [(color, direction) for color in colors for direction in directions]
+                if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions):
+                    if random.random() > 0.5:
+                        rgb_static[i] = transforms.functional.hflip(rgb_static[i])
+                        actions[i][:,0] = rgb_static[i].shape[-1] - actions[i][:,0]
+                        # 更新方向
+                        if "left" in inst:
+                            inst = inst.replace("left", "right")
+                        elif "right" in inst:
+                            inst = inst.replace("right", "left")
+                    # 二次剔除垃圾样本： 首位点计算距离，作为方向
+                    if mask[i] == 1 and "right" in inst :
+                        if  actions[i][-1][0] - actions[i][0][0] < 0:
+                            mask[i] = 0 
+                    if mask[i] == 1 and "left" in inst :
+                        if  actions[i][-1][0] - actions[i][0][0] > 0:
+                            mask[i] = 0
+                    # if mask[i] == 1:
+                    #     # visualization 轨迹
+                    #     import cv2   
+                    #     rgb_static_rgb = cv2.cvtColor(rgb_static[i].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
+                    #     # for point_2d in future_2d_actions[:,:2]:
+                    #     #     cv2.circle(rgb_static_rgb, tuple(point_2d.tolist()), radius=3, color=(0, 255, 255), thickness=-1)
+                    #     for point_2d in actions[i,:,:]:
+                    #         cv2.circle(rgb_static_rgb, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                    #     # 把inst的文字放在图片左下角 放在左下角！
+                        
+                    #     cv2.putText(rgb_static_rgb, inst, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                    #     cv2.imshow('Processed RGB Static Image', rgb_static_rgb)  # 注意这里需要调整回 HWC 格式
+                    #     cv2.waitKey(0)
                 
         return {
             'rgb_static': rgb_static,
@@ -182,7 +199,7 @@ class LMDBDataset(Dataset):
 if __name__ == '__main__':
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 32
+    batch_size = 4
     num_workers = 1
     train_dataset = LMDBDataset(
         # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb", 
@@ -225,7 +242,7 @@ if __name__ == '__main__':
     for epoch in range(1):
         batch, load_time = train_prefetcher.next()
         while batch is not None:
-            
+            obs_mask = batch['mask'][..., 0]
             # print(batch)
-            batch, load_time = train_prefetcher.next()
+            batch, load_time = train_prefetcher.next() 
         

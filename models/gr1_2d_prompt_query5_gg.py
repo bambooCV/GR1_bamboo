@@ -148,7 +148,7 @@ class GR1(nn.Module):
         self.embed_gripper_state = torch.nn.Linear(2, hidden_size) # one-hot gripper state
         self.embed_state = torch.nn.Linear(2*hidden_size, hidden_size)
         if self.use_2d_traj:
-            self.traj_2d_tokens = 3
+            self.traj_2d_tokens = 5
             self.embed_traj_2d = nn.Embedding(224, hidden_size) # 224 是索引范围
             self.traj_2d_resampler = TokenLearnerAttention(hidden_size*2, 30, self.traj_2d_tokens, hidden_size) # 3个learnable token 代表2的坐标
             
@@ -467,6 +467,7 @@ class GR1(nn.Module):
         # 2d action prediction
         if self.act_2d_pred:
             action_2d_embedding = x[:, :, act_2d_query_token_start_i:(act_2d_query_token_start_i+self.pred_2d_points_num)]
+            action_2d_embedding = action_2d_embedding + embed_traj_2d
             for pred_act_2d_mlp in self.pred_act_2d_mlps:
                 action_2d_embedding = pred_act_2d_mlp(action_2d_embedding)
             traj_2d_preds = self.pred_2d_points(action_2d_embedding)
