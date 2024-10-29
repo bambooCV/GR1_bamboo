@@ -30,7 +30,7 @@ import models.vision_transformer as vits
 if use_r1_2d_prompt_splitquery_roiImg:
     from models.gr1_2d_prompt_splitquery_roiImg import GR1 
 else:
-    from models.gr1_2d_prompt_splitquery import GR1 
+    from models.gr1_2d_prompt_splitquery_nopatch import GR1 
 # from models.gr1_2d_prompt_behind import GR1 
 from tqdm import tqdm
 from AccelerateFix import AsyncStep
@@ -90,7 +90,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
     for epoch in range(cfg['num_epochs']):
         if use_r1_2d_prompt_splitquery_roiImg:
             log_loss = {
-                'rgb_static_selected_patches':0,
                 'traj_2d_preds':0,
                 'rgb_gripper': 0,
                 'action_arm': 0,
@@ -98,7 +97,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                 'total_loss': 0,
             }
             eval_log_loss = {
-                'rgb_static_selected_patches':0,
                 'traj_2d_preds':0,
                 'rgb_gripper': 0,
                 'action_arm': 0,
@@ -107,7 +105,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
         else:
             if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
                 log_loss = {
-                    'rgb_static_selected_patches':0,
                     'traj_2d_preds':0,
                     'rgb_static': 0,
                     'rgb_gripper': 0,
@@ -116,7 +113,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                     'total_loss': 0,
                 }
                 eval_log_loss = {
-                    'rgb_static_selected_patches':0,
                     'traj_2d_preds':0,
                     'rgb_static': 0,
                     'rgb_gripper': 0,
@@ -162,7 +158,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                     loss = {}
                     if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
                         # new loss
-                        loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
                         loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
                         
                         # old loss
@@ -170,11 +165,11 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                         loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
                         loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
                         if use_r1_2d_prompt_splitquery_roiImg:
-                            total_loss = loss['rgb_static_selected_patches'] + loss['traj_2d_preds']\
+                            total_loss =  loss['traj_2d_preds']\
                                         + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] * cfg['arm_loss_ratio']/100
                         else:
                             loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
-                            total_loss = loss['rgb_static_selected_patches'] + loss['traj_2d_preds']\
+                            total_loss = loss['traj_2d_preds']\
                                         + loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] * cfg['arm_loss_ratio']/100
                     else: 
                         loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
@@ -206,7 +201,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                         loss = {}
                         if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
                             # new loss
-                            loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
                             loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
                         
                             # old loss
@@ -315,7 +309,8 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('configs_2dTraj_3090_scratch.json'))
+    cfg = json.load(open('taskD_D_configs_2dTraj_3090_scratch.json'))
+    # cfg = json.load(open('taskD_D_configs_2dTraj_test.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -340,7 +335,7 @@ if __name__ == '__main__':
         cfg['action_mode'],
         cfg['act_dim'],
         start_ratio = 0,
-        end_ratio = 0.9, 
+        end_ratio = 0.95, 
     )
     test_dataset = LMDBdst_jpeg(
         cfg['LMDB_path'], 
@@ -348,7 +343,7 @@ if __name__ == '__main__':
         cfg['chunk_size'], 
         cfg['action_mode'],
         cfg['act_dim'],
-        start_ratio = 0.9,
+        start_ratio = 0.95,
         end_ratio = 1, 
     )
     train_loader = DataLoader(
@@ -420,12 +415,9 @@ if __name__ == '__main__':
         del pretrained_dict,filtered_pretrained_dict
         torch.cuda.empty_cache()
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
-        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']),map_location=device)['state_dict'] 
+        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
         acc.print('load ', cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']),  '\nmissing ', missing_keys, '\nunexpected ', unexpected_keys)
-        # 删除不再需要的变量以释放内存
-        del state_dict
-        torch.cuda.empty_cache()
     if cfg['compile_model']:
         model = torch.compile(model)
     if os.path.isfile(cfg['save_path']+'step.json'):

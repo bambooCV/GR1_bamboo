@@ -31,7 +31,7 @@ import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '5'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from pathlib import Path
 import sys
 import time
@@ -364,7 +364,7 @@ def main():
     if cfg['compile_model']:
         model = torch.compile(model)
     model_traj = TrajPredictPolicy(model_mae,model_clip)
-    model_traj_bulb = TrajPredictPolicy(model_mae,model_clip)
+   
     # 预训练模型读入
     model_path_traj = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
     # model_path_traj = "Save/task_D_D/diffusion2D_trajectory_with_20preprocess/ddp_task_D_D_best_checkpoint_118_e87.pth"
@@ -379,19 +379,7 @@ def main():
     else:
         model_traj.load_state_dict(state_dict_traj,strict=False)
         
-    model_path_traj_bulb = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    # model_path_traj_bulb = "Save/task_D_D/diffusion2D_trajectory_with_20preprocess/ddp_task_D_D_best_checkpoint_118_e87.pth"
-    state_dict_traj_bulb = torch.load(model_path_traj_bulb,map_location=device)['model_state_dict']
-    new_state_dict = {}
-    for key, value in state_dict_traj_bulb.items():
-        new_key = key.replace('module.', '')
-        new_state_dict[new_key] = value
-        multi_gpu = True
-    if multi_gpu:
-        model_traj_bulb.load_state_dict(new_state_dict,strict=False)
-    else:
-        model_traj_bulb.load_state_dict(state_dict_traj,strict=False)
-    model,model_traj,model_traj_bulb = acc.prepare(model, model_traj,model_traj_bulb,device_placement=[True,True,True])
+    model,model_traj = acc.prepare(model, model_traj,device_placement=[True,True])
     observation_space = {
         'rgb_obs': ['rgb_static', 'rgb_gripper'], 
         'depth_obs': [], 
@@ -402,10 +390,10 @@ def main():
     os.makedirs(eval_dir, exist_ok=True)
     env = make_env('./fake_dataset', observation_space, device)
     
-    eva = GR1CalvinEvaluation(model, model_traj,model_traj_bulb,cfg, preprocessor, device)
+    eva = GR1CalvinEvaluation(model, model_traj,cfg, preprocessor, device)
     model.eval()
     model_traj.eval()
-    model_traj_bulb.eval()
+
     
     avg_reward = torch.tensor(evaluate_policy(
         eva, 

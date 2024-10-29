@@ -31,7 +31,7 @@ import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '5'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from pathlib import Path
 import sys
 import time
@@ -67,7 +67,7 @@ import clip
 from PreProcess import PreProcess
 import models.vision_transformer as vits 
 
-# from models.gr1_2d_prompt_splitquery_roiImg import GR1
+# from models.gr1_2d_prompt import GR1
 from models.gr1_2d_prompt_splitquery import GR1
 
 import cv2
@@ -114,18 +114,20 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
             results.append(result)
             if not debug:
                 success_list = count_success(results)
-                with open(eval_sr_path, 'a') as f:
-                    line =f"{sequence_i}/{num_sequences}: "
+                eval_sr_path_rank = eval_sr_path + f"_{procs_id}"
+                with open(eval_sr_path_rank, 'a') as f:
+                    line =f"{procs_id} id {sequence_i}/{num_sequences}: "
                     for sr in success_list:
                         line += f"{sr:.3f} | "
                     sequence_i += 1
                     line += "\n"
                     f.write(line)
                 eval_sequences.set_description(
-                    " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(success_list)]) + "|"
+                    f"{procs_id} id "+ " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(success_list)]) + "|"
                 )
             else:
                 sequence_i += 1
+
         path_parts = eval_result_path.rsplit('.', 1)
         base_path = path_parts[0]
         extension = path_parts[1]
@@ -156,26 +158,9 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
 
 def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len):
     robot_obs, scene_obs = get_env_state_for_initial_condition(initial_state)
-    robot_obs = np.array(
-        [
-            0.02586889,
-            -0.2313129,
-            0.5712808,
-            3.09045411,
-            -0.02908596,
-            1.50013585,
-            0.07999963,
-            -1.21779124,
-            1.03987629,
-            2.11978254,
-            -2.34205014,
-            -0.87015899,
-            1.64119093,
-            0.55344928,
-            1.0,
-        ]
-    )
+
     env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
+
     success_counter = 0
     if debug:
         time.sleep(1)
@@ -188,11 +173,8 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         if success:
             success_counter += 1
         else:
-            if debug: #继续下一个子任务 不跳出
-                success_counter +=0
-            else:
-                return success_counter
             return success_counter
+
     return success_counter
 
 
@@ -231,13 +213,16 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
             # print(point_2d_resized)
             # print(action)
             for point_2d in point_2d_resized :
-                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-            point_2d_pred = traj_2d_pred * 200
-            # print(point_2d_pred)
-            for point_2d in point_2d_pred :
-                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(235, 206, 135), thickness=-1)
+                
+                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(135, 206, 235), thickness=-1)
+            # point_2d_pred = traj_2d_pred * 200
+            # # print(point_2d_pred)
+            # for point_2d in point_2d_pred :
+            #     cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
+            #     cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
             if cvshow_flag:
                 cv2.imshow("Pred Image Final", img_copy_vis)          
                 while True:
@@ -248,7 +233,6 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
                         diff_flag = True
                     if key == ord('d'): 
                         draw_flag = True
-                        # lang_annotation = "store the grasped block on the table"
                     break
                 if step == 360:
                     break
@@ -277,13 +261,16 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
                     # print(point_2d_resized)
                     # print(action)
                     for point_2d in point_2d_resized :
-                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-                    point_2d_pred = traj_2d_pred * 200
+                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(235, 206, 135), thickness=-1)
+                        
+                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(135, 206, 235), thickness=-1)
+                    # point_2d_pred = traj_2d_pred * 200
                     # print(point_2d_pred)
-                    for point_2d in point_2d_pred :
-                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                    # for point_2d in point_2d_pred :
+                    #     cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
+                    #     cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
                     if cvshow_flag:
                         cv2.imshow("Pred Image Final", img_copy_vis)          
                         cv2.waitKey(0) 
@@ -321,6 +308,10 @@ def main():
     model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0).to(device)
     checkpoint = torch.load(cfg['mae_ckpt'])
     model_mae.load_state_dict(checkpoint['model'], strict=False)
+    if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
+        training_target = ['act_pred', 'fwd_pred', 'fwd_pred_hand']
+    else:
+        training_target = ['act_pred']
     model = GR1(
         model_clip,
         model_mae,
@@ -329,7 +320,7 @@ def main():
         hidden_size=cfg['embed_dim'],
         sequence_length=cfg['seq_len'],
         chunk_size=cfg['chunk_size'],
-        training_target=['act_pred', 'fwd_pred', 'fwd_pred_hand'],
+        training_target=training_target,
         img_feat_dim=cfg['img_feat_dim'],
         patch_feat_dim=cfg['patch_feat_dim'],
         lang_feat_dim=cfg['lang_feat_dim'],
@@ -351,17 +342,20 @@ def main():
         resid_pdrop=cfg['dropout'],
         attn_pdrop=cfg['dropout'],
     ).to(device)  # for fused optimizer
+    model_traj = TrajPredictPolicy(model_mae,model_clip).to(device)
+
+    
+    # 预训练模型读入
     if cfg['load_bytedance_ckpt']:
-        model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'])['state_dict'], strict=False)
+        model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'],map_location=device)['state_dict'], strict=False)
         acc.print('load ', cfg['bytedance_ckpt_path'] )
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
-        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 
+        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']),map_location=device)['state_dict'] 
         model.load_state_dict(state_dict, strict=False)
         acc.print('load ', cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))
     if cfg['compile_model']:
         model = torch.compile(model)
-    model_traj = TrajPredictPolicy(model_mae,model_clip)
-    model_traj_bulb = TrajPredictPolicy(model_mae,model_clip)
+
     # 预训练模型读入
     # model_path_traj = "Save/diffusion_2D_trajectory/update4_with_pad10/ddp_task_ABC_D_best_checkpoint_103_e85.pth"
     model_path_traj = "Save/diffusion_2D_trajectory/update6_done/ddp_task_ABC_D_best_checkpoint_120_e57.pth"
@@ -376,19 +370,8 @@ def main():
     else:
         model_traj.load_state_dict(state_dict_traj,strict=False)
         
-    # model_path_traj_bulb = "Save/diffusion_2D_trajectory/update_with_bulb/ddp_task_ABC_D_best_checkpoint_85.pth"
-    model_path_traj_bulb = "Save/diffusion_2D_trajectory/update6_done/ddp_task_ABC_D_best_checkpoint_120_e57.pth"
-    state_dict_traj_bulb = torch.load(model_path_traj_bulb,map_location=device)['model_state_dict']
-    new_state_dict = {}
-    for key, value in state_dict_traj_bulb.items():
-        new_key = key.replace('module.', '')
-        new_state_dict[new_key] = value
-        multi_gpu = True
-    if multi_gpu:
-        model_traj_bulb.load_state_dict(new_state_dict,strict=False)
-    else:
-        model_traj_bulb.load_state_dict(state_dict_traj,strict=False)
-    model,model_traj,model_traj_bulb = acc.prepare(model, model_traj,model_traj_bulb,device_placement=[True,True,True])
+
+    model,model_traj = acc.prepare(model, model_traj,device_placement=[True,True])
     observation_space = {
         'rgb_obs': ['rgb_static', 'rgb_gripper'], 
         'depth_obs': [], 
@@ -399,10 +382,10 @@ def main():
     os.makedirs(eval_dir, exist_ok=True)
     env = make_env('./fake_dataset', observation_space, device)
     
-    eva = GR1CalvinEvaluation(model, model_traj,model_traj_bulb,cfg, preprocessor, device)
+    eva = GR1CalvinEvaluation(model, model_traj,cfg, preprocessor, device)
     model.eval()
     model_traj.eval()
-    model_traj_bulb.eval()
+
     
     avg_reward = torch.tensor(evaluate_policy(
         eva, 

@@ -31,7 +31,7 @@ import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '5'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from pathlib import Path
 import sys
 import time
@@ -88,7 +88,7 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
     conf_dir = Path(f"{CALVIN_ROOT}/calvin_models") / "conf"
     task_cfg = OmegaConf.load(conf_dir / "callbacks/rollout/tasks/new_playtable_tasks.yaml")
     task_oracle = hydra.utils.instantiate(task_cfg)
-    val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
+    val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml") # language instruction template：turn_off_led: ["press the button to turn off the led light"]
     eval_dir = get_log_dir(eval_dir)
     if json_loaded:
         if debug == True:
@@ -285,7 +285,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('task10_ABCD_D_configs_eval_2dTraj_fail_case.json'))
+    cfg = json.load(open('task_ABC_D_configs_eval_2dTraj_fail_case.json'))
     # The timeout here is 36000s to wait for other processes to finish the simulation
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
     acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])
@@ -351,8 +351,8 @@ def main():
         model = torch.compile(model)
 
     # 预训练模型读入
-    # model_path_traj = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    model_path_traj = "Save/ddp_task_ABCD_D_best_checkpoint_121_e55.pth"
+    # model_path_traj = "Save/diffusion_2D_trajectory/update4_with_pad10/ddp_task_ABC_D_best_checkpoint_103_e85.pth"
+    model_path_traj = "Save/diffusion_2D_trajectory/update6_done/ddp_task_ABC_D_best_checkpoint_120_e57.pth"
     state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict_traj.items():

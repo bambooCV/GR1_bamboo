@@ -26,8 +26,12 @@ import argparse
 import json
 import logging
 import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '5'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 from pathlib import Path
 import sys
 import time
@@ -83,7 +87,11 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
     val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
     eval_dir = get_log_dir(eval_dir)
     if json_loaded:
-        eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
+        if debug == True:
+            eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
+        else:
+            eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_1000.json")
+        # eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
     else:
         eval_sequences = get_sequences(num_sequences)
     num_seq_per_procs = num_sequences // num_procs
@@ -102,15 +110,16 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
             results.append(result)
             if not debug:
                 success_list = count_success(results)
-                with open(eval_sr_path, 'a') as f:
-                    line =f"{sequence_i}/{num_sequences}: "
+                eval_sr_path_rank = eval_sr_path + f"_{procs_id}"
+                with open(eval_sr_path_rank, 'a') as f:
+                    line =f"{procs_id} id {sequence_i}/{num_sequences}: "
                     for sr in success_list:
                         line += f"{sr:.3f} | "
                     sequence_i += 1
                     line += "\n"
                     f.write(line)
                 eval_sequences.set_description(
-                    " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(success_list)]) + "|"
+                    f"{procs_id} id "+ " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(success_list)]) + "|"
                 )
             else:
                 sequence_i += 1
@@ -210,6 +219,10 @@ def main():
     model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0).to(device)
     checkpoint = torch.load(cfg['mae_ckpt'])
     model_mae.load_state_dict(checkpoint['model'], strict=False)
+    if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
+        training_target = ['act_pred', 'fwd_pred', 'fwd_pred_hand']
+    else:
+        training_target = ['act_pred']
     model = GR1(
         model_clip,
         model_mae,
@@ -218,7 +231,7 @@ def main():
         hidden_size=cfg['embed_dim'],
         sequence_length=cfg['seq_len'],
         chunk_size=cfg['chunk_size'],
-        training_target=['act_pred', 'fwd_pred', 'fwd_pred_hand'],
+        training_target=training_target,
         img_feat_dim=cfg['img_feat_dim'],
         patch_feat_dim=cfg['patch_feat_dim'],
         lang_feat_dim=cfg['lang_feat_dim'],
@@ -240,10 +253,10 @@ def main():
         attn_pdrop=cfg['dropout'],
     ).to(device)  # for fused optimizer
     if cfg['load_bytedance_ckpt']:
-        model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'])['state_dict'], strict=False)
+        model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'],map_location=device)['state_dict'], strict=False)
         acc.print('load ', cfg['bytedance_ckpt_path'] )
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
-        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 
+        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']),map_location=device)['state_dict'] 
         model.load_state_dict(state_dict, strict=False)
         acc.print('load ', cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))
     if cfg['compile_model']:
@@ -263,9 +276,8 @@ def main():
     avg_reward = torch.tensor(evaluate_policy(
         eva, 
         env,
-        cfg['save_path']+'success_rate.txt', 
-        # cfg['save_path']+'result.txt', 
-        cfg['save_path']+'result', 
+        cfg['save_path']+'success_rate_e{}.txt'.format(cfg['load_epoch']), 
+        cfg['save_path']+'result_e{}.txt'.format(cfg['load_epoch']), 
         cfg['ep_len'],
         cfg['num_sequences'],
         acc.num_processes,

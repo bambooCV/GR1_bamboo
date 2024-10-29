@@ -124,8 +124,8 @@ scene:
   objects:
     fixed_objects:
       table:
-        file: calvin_table_D/urdf/calvin_table_D.urdf
-        # file: calvin_table_C/urdf/calvin_table_C.urdf
+        # file: calvin_table_D/urdf/calvin_table_D.urdf
+        file: calvin_table_C/urdf/calvin_table_C.urdf
         initial_pos:
         - 0
         - 0

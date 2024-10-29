@@ -64,7 +64,6 @@ class GR1CalvinEvaluation(CalvinBaseModel):
     def __init__(self,
                  policy,
                  policy_traj,
-                 policy_traj_bulb,
                  variant,
                  preprocessor,
                  device
@@ -92,7 +91,6 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         self.preprocessor = preprocessor 
         self.policy = policy
         self.policy_traj = policy_traj
-        self.policy_traj_bulb = policy_traj_bulb
         # policy config
         self.num_diffusion_iters = 100
         self.noise_scheduler = DDPMScheduler(
@@ -132,7 +130,6 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         # Language
         # goal = 'grasp and lift the block'
         text = goal
-        text = 'grasp and lift the block'
         tokenized_text = self.tokenizer(text)
 
         # RGB
@@ -199,6 +196,8 @@ class GR1CalvinEvaluation(CalvinBaseModel):
         re_diff_set = 200
         # 大策略
         if step == 0 or step%re_diff_set == 0 or diff_flag == True or self.strategy_flag == True:
+            if step == 200:
+                print("fsc tag twice")
             if self.strategy_flag:
                 self.strategy_flag = False
             with torch.no_grad():
@@ -339,7 +338,7 @@ class GR1CalvinEvaluation(CalvinBaseModel):
                 attention_mask=attention_mask
         )
 
-        if True:
+        if False:
             if debug:
                 # visualization image
                 p = 16
@@ -465,19 +464,19 @@ class GR1CalvinEvaluation(CalvinBaseModel):
 
         traj_2d_pred = prediction['traj_2d_preds'][0][-1]
         # 策略调优 先考虑x方向的问题 不考虑slider
-        if self.once_flag and ("the sliding door" not in text):
-        # if self.once_flag:
-            dis_x = re_out_action[...,0].max() - re_out_action[...,0].min()
-            mid_x = (re_out_action[..., 0].max() + re_out_action[..., 0].min()) / 2
-            max_index = re_out_action[..., 0].argmax()
-            min_index = re_out_action[..., 0].argmin()
-            dis_y = re_out_action[...,1].max() - re_out_action[...,1].min()
-            if dis_y < 35 or dis_x > 100: # 扁平形状的才考虑 或者x非常长也可以
-                if max_index > min_index and dis_x > 60 and traj_2d_pred[0][0] * 224 >  mid_x:                    
-                    self.strategy_flag = True
-                    self.once_flag = False
-                elif max_index < min_index and dis_x > 60 and traj_2d_pred[0][0] * 224 < mid_x:
-                    self.strategy_flag = True
-                    self.once_flag = False
+        # if self.once_flag and ("the sliding door" not in text):
+        # # if self.once_flag:
+        #     dis_x = re_out_action[...,0].max() - re_out_action[...,0].min()
+        #     mid_x = (re_out_action[..., 0].max() + re_out_action[..., 0].min()) / 2
+        #     max_index = re_out_action[..., 0].argmax()
+        #     min_index = re_out_action[..., 0].argmin()
+        #     dis_y = re_out_action[...,1].max() - re_out_action[...,1].min()
+        #     if dis_y < 35 or dis_x > 100: # 扁平形状的才考虑 或者x非常长也可以
+        #         if max_index > min_index and dis_x > 60 and traj_2d_pred[0][0] * 224 >  mid_x:                    
+        #             self.strategy_flag = True
+        #             self.once_flag = False
+        #         elif max_index < min_index and dis_x > 60 and traj_2d_pred[0][0] * 224 < mid_x:
+        #             self.strategy_flag = True
+        #             self.once_flag = False
 
         return action_pred,re_out_action,traj_2d_pred

@@ -33,7 +33,7 @@ def contains_words(inst, include_words=[], exclude_words=[]):
             return False
     return True
 def save_checkpoint(epoch, model, optimizer,  loss,save_dir="./Save"):
-    save_path = os.path.join(save_dir, f'ddp_task_D_D_best_checkpoint_118_e{epoch}.pth')
+    save_path = os.path.join(save_dir, f'ddp_task_ABCD_D_best_checkpoint_121_e{epoch}.pth')
     
     # 要排除的模块列表
     modules_to_exclude = ['model_mae', 'model_clip']
@@ -149,12 +149,12 @@ if __name__ == '__main__':
     )
     wandb_model = True
     if wandb_model and acc.is_main_process:
-        wandb.init(project='robotic traj diffusion task_D_D arguement', group='robotic traj diffusion', name='DDP traj diffusion_D_D_0830')
+        wandb.init(project='robotic traj diffusion task_ABCD_D arguement', group='robotic traj diffusion', name='DDP traj diffusion_ABCD_D_0909')
     device = acc.device
     # config prepare
     epoch_num = 100
-    batch_size_train = 96
-    batch_size_val = 64
+    batch_size_train = 48
+    batch_size_val = 32
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb_V1"
@@ -177,7 +177,7 @@ if __name__ == '__main__':
         chunk_size = 30,# 最长不超过30
         action_dim = 2, # x,y,gripper_state
         start_ratio = 0,
-        end_ratio = 0.09, 
+        end_ratio = 0.99, 
     )
     val_dataset = LMDBDataset(
         lmdb_dir = lmdb_dir, 
@@ -345,7 +345,7 @@ if __name__ == '__main__':
                 batch, load_time = val_prefetcher.next()
                 val_index = 0
                 # 算 light bulb
-                while batch is not None and val_index < 500:
+                while batch is not None and val_index < 50000:
                     eval_flag = False
                     colors = ["pink", "blue", "red"]
                     directions = ["right", "left"]

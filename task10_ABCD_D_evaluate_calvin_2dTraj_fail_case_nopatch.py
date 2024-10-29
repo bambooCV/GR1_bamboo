@@ -68,7 +68,7 @@ from PreProcess import PreProcess
 import models.vision_transformer as vits 
 
 # from models.gr1_2d_prompt import GR1
-from models.gr1_2d_prompt_splitquery import GR1
+from models.gr1_2d_prompt_splitquery_nopatch import GR1
 
 import cv2
 logger = logging.getLogger(__name__)
@@ -352,7 +352,7 @@ def main():
 
     # 预训练模型读入
     # model_path_traj = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    model_path_traj = "Save/ddp_task_ABCD_D_best_checkpoint_121_e55.pth"
+    model_path_traj = "Save/task_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_121_e55.pth"
     state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict_traj.items():

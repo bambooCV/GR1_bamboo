@@ -1,6 +1,6 @@
 use_r1_2d_prompt_splitquery_roiImg = False
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5,6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
@@ -30,11 +30,22 @@ import models.vision_transformer as vits
 if use_r1_2d_prompt_splitquery_roiImg:
     from models.gr1_2d_prompt_splitquery_roiImg import GR1 
 else:
-    from models.gr1_2d_prompt_splitquery import GR1 
+    from models.gr1_2d_prompt_splitquery_nopatch import GR1 
 # from models.gr1_2d_prompt_behind import GR1 
 from tqdm import tqdm
 from AccelerateFix import AsyncStep
 # fsc
+def count_model_params_in_MB(model):
+    # 计算所有需要反向传播的参数的总数
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    # 每个参数的大小为 4 字节 (32 位浮点数)
+    param_size_in_bytes = total_params * 4
+    
+    # 转换为 MB (1MB = 1024 * 1024 字节)
+    param_size_in_MB = param_size_in_bytes / (1024 ** 2)
+    
+    return param_size_in_MB
 def masked_loss(pred, target, mask, skip_frame=0, loss_func=F.mse_loss,masked_patch=None,focal_loss=True):
     if skip_frame == 0:
         new_pred = pred
@@ -90,7 +101,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
     for epoch in range(cfg['num_epochs']):
         if use_r1_2d_prompt_splitquery_roiImg:
             log_loss = {
-                'rgb_static_selected_patches':0,
                 'traj_2d_preds':0,
                 'rgb_gripper': 0,
                 'action_arm': 0,
@@ -98,7 +108,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                 'total_loss': 0,
             }
             eval_log_loss = {
-                'rgb_static_selected_patches':0,
                 'traj_2d_preds':0,
                 'rgb_gripper': 0,
                 'action_arm': 0,
@@ -107,7 +116,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
         else:
             if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
                 log_loss = {
-                    'rgb_static_selected_patches':0,
                     'traj_2d_preds':0,
                     'rgb_static': 0,
                     'rgb_gripper': 0,
@@ -116,7 +124,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                     'total_loss': 0,
                 }
                 eval_log_loss = {
-                    'rgb_static_selected_patches':0,
                     'traj_2d_preds':0,
                     'rgb_static': 0,
                     'rgb_gripper': 0,
@@ -162,7 +169,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                     loss = {}
                     if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
                         # new loss
-                        loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
                         loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
                         
                         # old loss
@@ -170,11 +176,11 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                         loss['action_arm'] = masked_loss(pred['arm_action_preds'], batch['actions'][..., :6], batch['mask'], 0, F.smooth_l1_loss)
                         loss['action_gripper'] = masked_loss(pred['gripper_action_preds'], batch['actions'][..., -1:], batch['mask'], 0, F.binary_cross_entropy_with_logits)
                         if use_r1_2d_prompt_splitquery_roiImg:
-                            total_loss = loss['rgb_static_selected_patches'] + loss['traj_2d_preds']\
+                            total_loss =  loss['traj_2d_preds']\
                                         + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] * cfg['arm_loss_ratio']/100
                         else:
                             loss['rgb_static'] = masked_loss(pred['obs_preds'], pred['obs_targets'], obs_mask, cfg['skip_frame'], F.mse_loss)
-                            total_loss = loss['rgb_static_selected_patches'] + loss['traj_2d_preds']\
+                            total_loss = loss['traj_2d_preds']\
                                         + loss['rgb_static'] + loss['rgb_gripper'] + cfg['arm_loss_ratio']*loss['action_arm'] + loss['action_gripper'] * cfg['arm_loss_ratio']/100
                     else: 
                         loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
@@ -206,7 +212,6 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
                         loss = {}
                         if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
                             # new loss
-                            loss['rgb_static_selected_patches'] = masked_loss(pred['obs_preds'], pred['obs_targets'] , obs_mask, cfg['skip_frame'],F.mse_loss,pred['masked_2d_patch'])
                             loss['traj_2d_preds'] = masked_loss(pred['traj_2d_preds'], batch['traj_2d_preds'][:,:,:pred['traj_2d_preds'].shape[2]]/200, batch['mask'], 0, F.smooth_l1_loss)
                         
                             # old loss
@@ -315,7 +320,7 @@ def train(acc, train_prefetcher, test_prefetcher, preprocessor, model, env, eva,
 
 if __name__ == '__main__':
     # Preparation
-    cfg = json.load(open('taskD_D_configs_2dTraj_3090_scratch.json'))
+    cfg = json.load(open('task10_ABCD_D_configs_2dTraj_3090_scratch.json'))
     # cfg = json.load(open('taskD_D_configs_2dTraj_test.json'))
     # The timeout here is 3600s to wait for other processes to finish the simulation
     init_pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=3600))
@@ -341,7 +346,7 @@ if __name__ == '__main__':
         cfg['action_mode'],
         cfg['act_dim'],
         start_ratio = 0,
-        end_ratio = 0.95, 
+        end_ratio = 0.09, 
     )
     test_dataset = LMDBdst_jpeg(
         cfg['LMDB_path'], 
@@ -349,7 +354,7 @@ if __name__ == '__main__':
         cfg['chunk_size'], 
         cfg['action_mode'],
         cfg['act_dim'],
-        start_ratio = 0.95,
+        start_ratio = 0.99,
         end_ratio = 1, 
     )
     train_loader = DataLoader(
@@ -370,8 +375,8 @@ if __name__ == '__main__':
         prefetch_factor=cfg['prefetch_factor'],
         persistent_workers=True,
     ) 
-    model_clip, _ = clip.load(cfg['clip_backbone'], device=device) 
-    model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0).to(device)
+    model_clip, _ = clip.load(cfg['clip_backbone']) 
+    model_mae = vits.__dict__['vit_base'](patch_size=16, num_classes=0)
     checkpoint = torch.load(cfg['mae_ckpt'])
     model_mae.load_state_dict(checkpoint['model'], strict=False)
     if cfg['fwd_pred'] and cfg['fwd_pred_hand']:
@@ -407,9 +412,14 @@ if __name__ == '__main__':
         n_positions=cfg['n_positions'],
         resid_pdrop=cfg['dropout'],
         attn_pdrop=cfg['dropout'],
-    ).to(device)  # for fused optimizer
+    ).to(device)
+    
+    
+    print(f"Total model size (for backpropagation) in MB: {count_model_params_in_MB(model):.2f} MB")
+    
+    
     if cfg['load_bytedance_ckpt']:
-        pretrained_dict = torch.load(cfg['bytedance_ckpt_path'])['state_dict']
+        pretrained_dict = torch.load(cfg['bytedance_ckpt_path'],map_location=device)['state_dict']
        # 过滤掉与 model_mae 和 text_encoder 相关的层
         filtered_pretrained_dict = {
             k: v for k, v in pretrained_dict.items() if 'model_mae' not in k and 'text_encoder' not in k
@@ -417,6 +427,9 @@ if __name__ == '__main__':
         missing_keys, unexpected_keys = model.load_state_dict(filtered_pretrained_dict, strict=False)
         
         acc.print('load ', cfg['bytedance_ckpt_path'], '\nmissing ', missing_keys, '\nunexpected ', unexpected_keys)
+        # 删除不再需要的变量以释放内存
+        del pretrained_dict,filtered_pretrained_dict
+        torch.cuda.empty_cache()
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
         state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)

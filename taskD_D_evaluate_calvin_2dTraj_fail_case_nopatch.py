@@ -60,15 +60,15 @@ from termcolor import colored
 import torch
 from tqdm.auto import tqdm
 
-from evaluation.calvin_evaluation_traj import GR1CalvinEvaluation
-
+# from evaluation.calvin_evaluation_traj import GR1CalvinEvaluation
+from evaluation.calvin_evaluation_traj_noprompt import GR1CalvinEvaluation
 from utils.calvin_utils import print_and_save,print_and_save_json
 import clip
 from PreProcess import PreProcess
 import models.vision_transformer as vits 
 
 # from models.gr1_2d_prompt import GR1
-from models.gr1_2d_prompt_splitquery import GR1
+from models.gr1_2d_prompt_splitquery_nopatch import GR1
 
 import cv2
 logger = logging.getLogger(__name__)
@@ -285,7 +285,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('task10_ABCD_D_configs_eval_2dTraj_fail_case.json'))
+    cfg = json.load(open('taskD_D_configs_eval_2dTraj_fail_case.json'))
     # The timeout here is 36000s to wait for other processes to finish the simulation
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
     acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])
@@ -351,8 +351,7 @@ def main():
         model = torch.compile(model)
 
     # 预训练模型读入
-    # model_path_traj = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    model_path_traj = "Save/ddp_task_ABCD_D_best_checkpoint_121_e55.pth"
+    model_path_traj = "Save/task_D_D/diffusion2D_trajectory_with_20preprocess/ddp_task_D_D_best_checkpoint_118_e87.pth"
     state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict_traj.items():

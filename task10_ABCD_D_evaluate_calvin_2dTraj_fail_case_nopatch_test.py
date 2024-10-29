@@ -31,7 +31,7 @@ import os
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4,5,6,7'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '6,7,8,9'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '5'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from pathlib import Path
 import sys
 import time
@@ -68,7 +68,7 @@ from PreProcess import PreProcess
 import models.vision_transformer as vits 
 
 # from models.gr1_2d_prompt import GR1
-from models.gr1_2d_prompt_splitquery import GR1
+from models.gr1_2d_prompt_splitquery_nopatch import GR1
 
 import cv2
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
             eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
         else:
             eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_1000.json")
-        # eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case.json")
+        eval_sequences = get_sequences_saved(num_sequences,filename="eval_episode_fail_case_test.json")
     else:
         eval_sequences = get_sequences(num_sequences)
     num_seq_per_procs = num_sequences // num_procs
@@ -206,20 +206,26 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
         unfinished -= 1
         if debug:
 
+            
             # inference traj inference
             img_copy = copy.deepcopy(obs['rgb_obs']['rgb_static'])
             img_copy_vis = cv2.cvtColor(img_copy, cv2.COLOR_BGR2RGB)
+            if cvshow_flag:
+                cv2.imshow("Pred Image", img_copy_vis)      
             point_2d_resized = re_out_action * 200/224
             # print(point_2d_resized)
             # print(action)
             for point_2d in point_2d_resized :
-                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-            point_2d_pred = traj_2d_pred * 200
-            # print(point_2d_pred)
-            for point_2d in point_2d_pred :
-                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(235, 206, 135), thickness=-1)
+                
+                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(135, 206, 235), thickness=-1)
+            # point_2d_pred = traj_2d_pred * 200
+            # # print(point_2d_pred)
+            # for point_2d in point_2d_pred :
+            #     cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
+            #     cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
             if cvshow_flag:
                 cv2.imshow("Pred Image Final", img_copy_vis)          
                 while True:
@@ -258,13 +264,16 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
                     # print(point_2d_resized)
                     # print(action)
                     for point_2d in point_2d_resized :
-                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-                    point_2d_pred = traj_2d_pred * 200
+                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(235, 206, 135), thickness=-1)
+                        
+                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
+                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(135, 206, 235), thickness=-1)
+                    # point_2d_pred = traj_2d_pred * 200
                     # print(point_2d_pred)
-                    for point_2d in point_2d_pred :
-                        cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
-                        cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                    # for point_2d in point_2d_pred :
+                    #     cv2.circle(img_copy_vis, tuple(point_2d.int().tolist()), radius=3, color=(255, 0, 0), thickness=-1)
+                    #     cv2.circle(img_copy, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
                     if cvshow_flag:
                         cv2.imshow("Pred Image Final", img_copy_vis)          
                         cv2.waitKey(0) 
@@ -285,7 +294,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('task10_ABCD_D_configs_eval_2dTraj_fail_case.json'))
+    cfg = json.load(open('task10_ABCD_D_configs_eval_2dTraj_fail_case_test.json'))
     # The timeout here is 36000s to wait for other processes to finish the simulation
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
     acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])
@@ -352,7 +361,7 @@ def main():
 
     # 预训练模型读入
     # model_path_traj = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    model_path_traj = "Save/ddp_task_ABCD_D_best_checkpoint_121_e55.pth"
+    model_path_traj = "Save/task_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_121_e55.pth"
     state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict_traj.items():

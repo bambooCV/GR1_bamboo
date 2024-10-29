@@ -124,11 +124,11 @@ if __name__ == '__main__':
         wandb.init(project='robotic traj diffusion task_D_D', group='robotic traj diffusion', name='traj diffusion_0626normaction')
     # config prepare
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 64
+    batch_size = 96
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb_V1"
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
     #image preprocess
     preprocessor = PreProcess(
         rgb_static_pad = 10,
@@ -145,7 +145,7 @@ if __name__ == '__main__':
         chunk_size = 30,# 最长不超过30
         action_dim = 2, # x,y,gripper_state
         start_ratio = 0,
-        end_ratio = 0.95, 
+        end_ratio = 0.9, 
     )
     val_dataset = LMDBDataset(
         lmdb_dir = lmdb_dir, 
@@ -178,8 +178,11 @@ if __name__ == '__main__':
              
     model = TrajPredictPolicy()
     # 预训练模型读入
-    model_path = "Save/task_D_D/diffusion2D_trajectory_with_20preprocess/ddp_task_D_D_best_checkpoint_118_e97.pth"
-
+    model_path = "Save/ddp_task_ABC_D_best_checkpoint_120_e57.pth"
+    # model_path = "Save/diffusion_2D_trajectory/update5_with_bulb_aur/ddp_task_ABC_D_best_checkpoint_118_e27.pth"
+    # model_path = "Save/diffusion_2D_trajectory/update4_with_pad10/ddp_task_ABC_D_best_checkpoint_103_e85.pth"
+    # model_path = "Save/diffusion_2D_trajectory/update_with_bulb/ddp_task_ABC_D_best_checkpoint_27.pth"
+    # model_path = "Save/diffusion_2D_trajectory/update3_with_pad20_bulb_fail/ddp_task_ABC_D_best_checkpoint_103_e30.pth"
     state_dict = torch.load(model_path,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict.items():
@@ -210,12 +213,12 @@ if __name__ == '__main__':
     directions = ["right", "left"]
     exclude_words = ["rotate"]
     include_conditions = [(color, direction) for color in colors for direction in directions]
-    with tqdm(total=len(val_loader), desc=f"Val Epoch {0}", leave=False) as pbar:
+    with tqdm(total=len(val_loader), desc=f"Val Epoch {72}", leave=False) as pbar:
             with torch.no_grad():
                 batch, load_time = val_prefetcher.next()
                 val_index = 0
                 # 算 light bulb
-                while batch is not None and val_index < 500:
+                while batch is not None and val_index < 20:
                     eval_flag = False
                     
                     colors = ["pink", "blue", "red"]
@@ -224,11 +227,14 @@ if __name__ == '__main__':
                     include_conditions = [(color, direction) for color in colors for direction in directions]
 
                     for inst in batch['inst']:
-                        # if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions) or \
-                        #    "lightbulb" in inst or "light bulb" in inst :
-                        if "lightbulb" in inst or "light bulb" in inst :
+                        # if "sliding door" in inst:
+                        # if "led" in inst:
+                        # if "lightbulb" in inst or "light bulb" in inst:
+                        # if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions):
+                        if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions) or \
+                           "lightbulb" in inst or "light bulb" in inst :
                             eval_flag = True
-                    # eval_flag = True
+
                     if eval_flag:
                         model.eval()
                         language = batch['inst_token']
@@ -258,9 +264,20 @@ if __name__ == '__main__':
                                 timestep=k,
                                 sample=out_action
                             ).prev_sample
+                            # val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
+                            # val_sample_loss_values.append(val_sample_loss.cpu())
                         end_time = time()
                         execution_time = end_time - start_time
 
+                        # print(f"Code block executed in {execution_time} seconds.")
+                        # plt.figure(figsize=(10, 6))
+                        # plt.plot(noise_scheduler.timesteps, val_sample_loss_values, marker='o', linestyle='-', color='b')
+                        # plt.xlabel('Timestep (k)')
+                        # plt.ylabel('Validation Sample Loss (MSE)')
+                        # plt.title('Validation Sample Loss vs Timestep')
+                        # plt.grid(True)
+                        # plt.gca().invert_xaxis()  # 将横坐标从 100 到 0 反转显示
+                        # plt.show()
                         
                         re_out_action = unnormalize_data(out_action)
                         val_sample_loss =nn.functional.mse_loss(out_action, naction_trans_norm.squeeze(1))
@@ -286,11 +303,10 @@ if __name__ == '__main__':
                                 cv2.imshow("Ori Reshape Image", rgb_static_np)
                                 
                                 rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                                for point_2d in re_out_action[batch_idx,seq_idx,::2,:]:
-                                    # cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                                    cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
-                                    cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(235, 206, 135), thickness=-1)
-                                # cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                                for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
+                                    cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                                
+                                cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
                                 cv2.imshow("Pred Image", rgb_static_np2)      
                                 # print(nn.functional.mse_loss(out_action[batch_idx][seq_idx], naction_trans_norm.squeeze(1)[batch_idx][seq_idx]))     
                                 cv2.waitKey(0)

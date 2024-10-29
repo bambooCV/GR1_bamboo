@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import sys
 import torch,clip
 import torch.nn as nn
@@ -127,8 +127,9 @@ if __name__ == '__main__':
     batch_size = 64
     num_workers = 4
     # lmdb_dir = "/home/DATASET_PUBLIC/calvin/calvin_debug_dataset/calvin_lmdb"
-    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb_V1"
-    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_D_D/calvin_lmdb_V1"
+    lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABC_D/calvin_lmdb"
+    # lmdb_dir = "/home/DATASET_PUBLIC/calvin/task_ABCD_D/calvin_lmdb_V1"
     #image preprocess
     preprocessor = PreProcess(
         rgb_static_pad = 10,
@@ -145,14 +146,14 @@ if __name__ == '__main__':
         chunk_size = 30,# 最长不超过30
         action_dim = 2, # x,y,gripper_state
         start_ratio = 0,
-        end_ratio = 0.95, 
+        end_ratio = 0.09, 
     )
     val_dataset = LMDBDataset(
         lmdb_dir = lmdb_dir, 
         sequence_length = 1, 
         chunk_size = 30,# 最长不超过30
         action_dim = 2,
-        start_ratio = 0.95,
+        start_ratio = 0.99,
         end_ratio = 1, 
     )
     train_loader = DataLoader(
@@ -178,8 +179,8 @@ if __name__ == '__main__':
              
     model = TrajPredictPolicy()
     # 预训练模型读入
-    model_path = "Save/task_D_D/diffusion2D_trajectory_with_20preprocess/ddp_task_D_D_best_checkpoint_118_e97.pth"
-
+    model_path = "Save/ddp_task10_ABC_D_best_checkpoint_121_e43.pth"
+    
     state_dict = torch.load(model_path,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict.items():
@@ -224,11 +225,10 @@ if __name__ == '__main__':
                     include_conditions = [(color, direction) for color in colors for direction in directions]
 
                     for inst in batch['inst']:
-                        # if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions) or \
-                        #    "lightbulb" in inst or "light bulb" in inst :
-                        if "lightbulb" in inst or "light bulb" in inst :
+                        if any(contains_words(inst, include_words=cond, exclude_words=exclude_words) for cond in include_conditions) or \
+                           "lightbulb" in inst or "light bulb" in inst :
                             eval_flag = True
-                    # eval_flag = True
+                    eval_flag = True
                     if eval_flag:
                         model.eval()
                         language = batch['inst_token']
@@ -286,11 +286,10 @@ if __name__ == '__main__':
                                 cv2.imshow("Ori Reshape Image", rgb_static_np)
                                 
                                 rgb_static_np2 = cv2.cvtColor(rgb_static_reshape[batch_idx][seq_idx].squeeze().permute(1, 2, 0).cpu().numpy(), cv2.COLOR_BGR2RGB)
-                                for point_2d in re_out_action[batch_idx,seq_idx,::2,:]:
-                                    # cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
-                                    cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=4, color=(255, 255, 255), thickness=-1)
-                                    cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(235, 206, 135), thickness=-1)
-                                # cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
+                                for point_2d in re_out_action[batch_idx,seq_idx,:,:]:
+                                    cv2.circle(rgb_static_np2, tuple(point_2d.int().tolist()), radius=3, color=(0, 0, 255), thickness=-1)
+                                
+                                cv2.putText(rgb_static_np2, batch['inst'][batch_idx], (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 0, 0), 1)
                                 cv2.imshow("Pred Image", rgb_static_np2)      
                                 # print(nn.functional.mse_loss(out_action[batch_idx][seq_idx], naction_trans_norm.squeeze(1)[batch_idx][seq_idx]))     
                                 cv2.waitKey(0)

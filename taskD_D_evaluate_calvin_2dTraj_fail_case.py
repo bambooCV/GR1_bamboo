@@ -77,26 +77,6 @@ os.environ["FFMPEG_BINARY"] = "auto-detect"
 os.environ['CALVIN_ROOT'] = "/gpfsdata/home/shichao/EmbodiedAI/manipulation/calvin"
 CALVIN_ROOT = os.environ['CALVIN_ROOT']
 
-import signal
-# 定义超时后的处理函数
-def handler(signum, frame):
-    raise TimeoutError("Function execution timed out")
-
-# 使用超时机制的函数
-def evaluate_with_timeout(timeout, *args, **kwargs):
-    # 设置超时信号
-    signal.signal(signal.SIGALRM, handler)
-    signal.alarm(timeout)  # 设置超时时间（秒）
-
-    try:
-        result = evaluate_sequence(*args, **kwargs)
-        signal.alarm(0)  # 取消超时警报
-        return result
-    except TimeoutError:
-        print(f"Function timed out after {timeout} seconds.")
-        return None
-    
-    
 def make_env(dataset_path, observation_space, device):
     val_folder = Path(dataset_path) / "validation"
     from evaluation.calvin_env_wrapper_raw import CalvinEnvWrapperRaw
@@ -130,23 +110,12 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
         for item in eval_sequences:
             initial_state = item["state"]
             eval_sequence = item["result"]
-            if debug:
-                # protect original
-                result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len)
-            else:        
-                # protect
-                timeout = 600  # 设置超时为600秒
-                result = evaluate_with_timeout(timeout, env, model, task_oracle, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len,procs_id)
-
-                if result is None:
-                    result = 0
-
+            result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len)
             results.append(result)
             if not debug:
                 success_list = count_success(results)
                 eval_sr_path_rank = eval_sr_path + f"_{procs_id}"
                 with open(eval_sr_path_rank, 'a') as f:
-                # with open(eval_sr_path, 'a') as f:
                     line =f"{procs_id} id {sequence_i}/{num_sequences}: "
                     for sr in success_list:
                         line += f"{sr:.3f} | "
@@ -187,8 +156,7 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
     return results
 
 
-def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len,procs_id=0):
-
+def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len):
     robot_obs, scene_obs = get_env_state_for_initial_condition(initial_state)
 
     env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
@@ -201,8 +169,7 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         print(f"Evaluating sequence: {' -> '.join(eval_sequence)}")
         print("Subtask: ", end="")
     for subtask_i, subtask in enumerate(eval_sequence):
-        success = rollout(env, model, task_checker, subtask, val_annotations, debug, eval_dir, subtask_i, sequence_i, ep_len, procs_id)
-
+        success = rollout(env, model, task_checker, subtask, val_annotations, debug, eval_dir, subtask_i, sequence_i, ep_len)
         if success:
             success_counter += 1
         else:
@@ -211,36 +178,31 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
     return success_counter
 
 
-def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, subtask_i, sequence_i, ep_len,procs_id=0):
+def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, subtask_i, sequence_i, ep_len):
     if debug:
         print(f"{subtask} ", end="")
         time.sleep(0.5)
     obs = env.get_obs()
-
     lang_annotation = val_annotations[subtask][0]
     
     model.reset()
 
     start_info = env.get_info()
-
     if debug:
         img_list = []
     unfinished = 0
     diff_flag = False
     draw_flag = False
     for step in range(ep_len):
-
         if unfinished == 0:
-            action,re_out_action,traj_2d_pred = model.step(obs, lang_annotation,step,diff_flag,debug,draw_flag,procs_id)
+            action,re_out_action,traj_2d_pred = model.step(obs, lang_annotation,step,diff_flag,debug,draw_flag)
             if diff_flag:
                 diff_flag = False
             if draw_flag:
                 draw_flag = False
 
             unfinished = action.shape[0]
-
         obs, _, _, current_info = env.step(action[-unfinished])
-
         unfinished -= 1
         if debug:
 
@@ -274,7 +236,6 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
             img_list.append(img_copy)
         # check if current step solves a task
         current_task_info = task_oracle.get_task_info_for_set(start_info, current_info, {subtask})
-
         if len(current_task_info) > 0:
             if debug:
                 print(colored("success", "green"), end=" ")
@@ -282,15 +243,13 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
             while step < current_frame + 10:
                 # 多走10帧
                 if unfinished == 0:
-                    action,re_out_action,traj_2d_pred = model.step(obs, lang_annotation,step,diff_flag,debug,procs_id)
+                    action,re_out_action,traj_2d_pred = model.step(obs, lang_annotation,step,diff_flag,debug)
                     if diff_flag:
                         diff_flag = False
                     unfinished = action.shape[0]
                 obs, _, _, current_info = env.step(action[-unfinished])
                 unfinished -= 1
                 step = step + 1
-                if step > 370:
-                    print("fsc debug fail")
                 if debug:
                     # inference traj inference
                     img_copy = copy.deepcopy(obs['rgb_obs']['rgb_static'])
@@ -310,14 +269,12 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
                         cv2.imshow("Pred Image Final", img_copy_vis)          
                         cv2.waitKey(0) 
                     img_list.append(img_copy)
-
             if debug:
                 # print(colored("success", "green"), end=" ")
                 clip = ImageSequenceClip(img_list, fps=30)
                 clip.write_gif(os.path.join(eval_dir, f'{sequence_i}-{subtask_i}-{subtask}-succ.gif'), fps=30)
                 # print(obs["robot_obs"])
             return True
-
     if debug:
         if len(img_list) > 10:
             print(colored("fail", "red"), end=" ")
@@ -328,7 +285,7 @@ def rollout(env, model, task_oracle, subtask, val_annotations, debug, eval_dir, 
 
 def main():
     # Preparation
-    cfg = json.load(open('task10_ABCD_D_configs_eval_2dTraj_fail_case.json'))
+    cfg = json.load(open('taskD_D_configs_eval_2dTraj_fail_case.json'))
     # The timeout here is 36000s to wait for other processes to finish the simulation
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=360000))
     acc = Accelerator(mixed_precision="bf16",kwargs_handlers=[kwargs])
@@ -380,7 +337,7 @@ def main():
         attn_pdrop=cfg['dropout'],
     ).to(device)  # for fused optimizer
     model_traj = TrajPredictPolicy(model_mae,model_clip).to(device)
-    model_traj_bulb = TrajPredictPolicy(model_mae,model_clip).to(device)
+
     
     # 预训练模型读入
     if cfg['load_bytedance_ckpt']:
@@ -394,8 +351,7 @@ def main():
         model = torch.compile(model)
 
     # 预训练模型读入
-    model_path_traj = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    
+    model_path_traj = "Save/task_D_D/diffusion2D_trajectory_with_20preprocess/ddp_task_D_D_best_checkpoint_118_e87.pth"
     state_dict_traj = torch.load(model_path_traj,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict_traj.items():
@@ -407,18 +363,8 @@ def main():
     else:
         model_traj.load_state_dict(state_dict_traj,strict=False)
         
-    model_path_traj_bulb = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    state_dict_traj_bulb = torch.load(model_path_traj_bulb,map_location=device)['model_state_dict']
-    new_state_dict = {}
-    for key, value in state_dict_traj_bulb.items():
-        new_key = key.replace('module.', '')
-        new_state_dict[new_key] = value
-        multi_gpu = True
-    if multi_gpu:
-        model_traj_bulb.load_state_dict(new_state_dict,strict=False)
-    else:
-        model_traj_bulb.load_state_dict(state_dict_traj,strict=False)
-    model,model_traj,model_traj_bulb = acc.prepare(model, model_traj,model_traj_bulb,device_placement=[True,True,True])
+
+    model,model_traj = acc.prepare(model, model_traj,device_placement=[True,True])
     observation_space = {
         'rgb_obs': ['rgb_static', 'rgb_gripper'], 
         'depth_obs': [], 
@@ -429,10 +375,10 @@ def main():
     os.makedirs(eval_dir, exist_ok=True)
     env = make_env('./fake_dataset', observation_space, device)
     
-    eva = GR1CalvinEvaluation(model, model_traj,model_traj_bulb,cfg, preprocessor, device)
+    eva = GR1CalvinEvaluation(model, model_traj,cfg, preprocessor, device)
     model.eval()
     model_traj.eval()
-    model_traj_bulb.eval()
+
     
     avg_reward = torch.tensor(evaluate_policy(
         eva, 

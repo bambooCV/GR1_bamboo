@@ -179,8 +179,8 @@ if __name__ == '__main__':
              
     model = TrajPredictPolicy()
     # 预训练模型读入
-    model_path = "Save/ddp_task_D_D_best_checkpoint_118_e72.pth"
-
+    model_path = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
+    
     state_dict = torch.load(model_path,map_location=device)['model_state_dict']
     new_state_dict = {}
     for key, value in state_dict.items():

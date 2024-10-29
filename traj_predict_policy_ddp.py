@@ -24,6 +24,17 @@ import wandb
 from traj_predict.traj_func import PreProcess
 os.environ["WANDB_API_KEY"] = 'KEY'
 os.environ["WANDB_MODE"] = "offline"
+def count_model_params_in_MB(model):
+    # 计算所有需要反向传播的参数的总数
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    # 每个参数的大小为 4 字节 (32 位浮点数)
+    param_size_in_bytes = total_params * 4
+    
+    # 转换为 MB (1MB = 1024 * 1024 字节)
+    param_size_in_MB = param_size_in_bytes / (1024 ** 2)
+    
+    return param_size_in_MB
 def contains_words(inst, include_words=[], exclude_words=[]):
     for word in include_words:
         if word not in inst:
@@ -213,7 +224,7 @@ if __name__ == '__main__':
     # model.load_state_dict(torch.load(model_path)['model_state_dict'],strict=False)
     model = model.to(device)
 
-
+    print(f"Total model size (for backpropagation) in MB: {count_model_params_in_MB(model):.2f} MB")
 
     
     # policy config

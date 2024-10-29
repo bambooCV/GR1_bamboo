@@ -114,18 +114,20 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
             results.append(result)
             if not debug:
                 success_list = count_success(results)
-                with open(eval_sr_path, 'a') as f:
-                    line =f"{sequence_i}/{num_sequences}: "
+                eval_sr_path_rank = eval_sr_path + f"_{procs_id}"
+                with open(eval_sr_path_rank, 'a') as f:
+                    line =f"{procs_id} id {sequence_i}/{num_sequences}: "
                     for sr in success_list:
                         line += f"{sr:.3f} | "
                     sequence_i += 1
                     line += "\n"
                     f.write(line)
                 eval_sequences.set_description(
-                    " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(success_list)]) + "|"
+                    f"{procs_id} id "+ " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(success_list)]) + "|"
                 )
             else:
                 sequence_i += 1
+
         path_parts = eval_result_path.rsplit('.', 1)
         base_path = path_parts[0]
         extension = path_parts[1]
@@ -156,26 +158,9 @@ def evaluate_policy(model, env, eval_sr_path, eval_result_path, ep_len, num_sequ
 
 def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, debug, eval_dir, sequence_i, ep_len):
     robot_obs, scene_obs = get_env_state_for_initial_condition(initial_state)
-    robot_obs = np.array(
-        [
-            0.02586889,
-            -0.2313129,
-            0.5712808,
-            3.09045411,
-            -0.02908596,
-            1.50013585,
-            0.07999963,
-            -1.21779124,
-            1.03987629,
-            2.11978254,
-            -2.34205014,
-            -0.87015899,
-            1.64119093,
-            0.55344928,
-            1.0,
-        ]
-    )
+
     env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
+
     success_counter = 0
     if debug:
         time.sleep(1)
@@ -188,11 +173,8 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         if success:
             success_counter += 1
         else:
-            if debug: #继续下一个子任务 不跳出
-                success_counter +=0
-            else:
-                return success_counter
             return success_counter
+
     return success_counter
 
 
@@ -354,17 +336,20 @@ def main():
         resid_pdrop=cfg['dropout'],
         attn_pdrop=cfg['dropout'],
     ).to(device)  # for fused optimizer
+    model_traj = TrajPredictPolicy(model_mae,model_clip).to(device)
+
+    
+    # 预训练模型读入
     if cfg['load_bytedance_ckpt']:
-        model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'])['state_dict'], strict=False)
+        model.load_state_dict(torch.load(cfg['bytedance_ckpt_path'],map_location=device)['state_dict'], strict=False)
         acc.print('load ', cfg['bytedance_ckpt_path'] )
     elif os.path.isfile(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch'])):
-        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))['state_dict'] 
+        state_dict = torch.load(cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']),map_location=device)['state_dict'] 
         model.load_state_dict(state_dict, strict=False)
         acc.print('load ', cfg['save_path']+'GR1_{}.pth'.format(cfg['load_epoch']))
     if cfg['compile_model']:
         model = torch.compile(model)
-    model_traj = TrajPredictPolicy(model_mae,model_clip)
-    model_traj_bulb = TrajPredictPolicy(model_mae,model_clip)
+
     # 预训练模型读入
     model_path_traj = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
     
@@ -379,18 +364,8 @@ def main():
     else:
         model_traj.load_state_dict(state_dict_traj,strict=False)
         
-    model_path_traj_bulb = "Save/task10_ABCD_D/diffusion_2D_trajectory/ddp_task_ABCD_D_best_checkpoint_118_e98.pth"
-    state_dict_traj_bulb = torch.load(model_path_traj_bulb,map_location=device)['model_state_dict']
-    new_state_dict = {}
-    for key, value in state_dict_traj_bulb.items():
-        new_key = key.replace('module.', '')
-        new_state_dict[new_key] = value
-        multi_gpu = True
-    if multi_gpu:
-        model_traj_bulb.load_state_dict(new_state_dict,strict=False)
-    else:
-        model_traj_bulb.load_state_dict(state_dict_traj,strict=False)
-    model,model_traj,model_traj_bulb = acc.prepare(model, model_traj,model_traj_bulb,device_placement=[True,True,True])
+
+    model,model_traj = acc.prepare(model, model_traj,device_placement=[True,True])
     observation_space = {
         'rgb_obs': ['rgb_static', 'rgb_gripper'], 
         'depth_obs': [], 
@@ -401,10 +376,10 @@ def main():
     os.makedirs(eval_dir, exist_ok=True)
     env = make_env('./fake_dataset', observation_space, device)
     
-    eva = GR1CalvinEvaluation(model, model_traj,model_traj_bulb,cfg, preprocessor, device)
+    eva = GR1CalvinEvaluation(model, model_traj,cfg, preprocessor, device)
     model.eval()
     model_traj.eval()
-    model_traj_bulb.eval()
+
     
     avg_reward = torch.tensor(evaluate_policy(
         eva, 

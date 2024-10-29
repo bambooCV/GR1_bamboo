@@ -1,0 +1,4 @@
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --main_process_port 29500 task_ABCD_D_traj_predict_policy_ddp.py
+CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch --main_process_port 29501 task10_ABCD_D_evaluate_calvin_2dTraj_fail_case.py > E45_log.txt
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --main_process_port 29500 task10_ABC_D_evaluate_calvin_2dTraj_fail_case.py 
+accelerate launch taskD_D_Main_2dTraj_prompt_nopatch.py
